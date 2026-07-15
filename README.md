@@ -2,6 +2,10 @@
 
 Personal customizations for [Hermes Agent](https://github.com/NousResearch/hermes-agent): skills, plugins, hooks, and config templates — all without modifying the agent core.
 
+## Naming convention
+
+Everything maintained in this repository uses the `omh` prefix so customizations are easy to identify and do not collide with other extensions. See [AGENTS.md](AGENTS.md) for the identifier-specific rules and examples.
+
 ## Layout
 
 ```
