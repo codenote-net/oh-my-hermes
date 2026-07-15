@@ -1,0 +1,28 @@
+# Example Hermes Agent configuration.
+# Copy to ~/.hermes/config.yaml and adjust. Do not commit secrets.
+
+# Scan additional skill directories (for example, this repository checked out locally).
+# skills:
+#   external_dirs:
+#     - ~/works/codenote-net/oh-my-hermes/skills
+
+# Third-party plugins must be enabled explicitly by plugin name.
+# plugins:
+#   enabled:
+#     - example-plugin
+
+# MCP servers (local stdio or remote HTTP).
+# mcp_servers:
+#   example-local:
+#     command: "example-mcp-server"
+#     args: ["--stdio"]
+#   example-remote:
+#     url: "https://mcp.example.com"
+
+# Shell hooks run commands for matching agent events.
+# hooks:
+#   post_tool_call:
+#     - matcher: "write_file|patch"
+#       command: "~/.hermes/agent-hooks/format-files.sh"
+#       timeout: 30
+# hooks_auto_accept: false
