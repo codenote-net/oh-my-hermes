@@ -2,7 +2,7 @@
 name: omh-video-to-minutes
 description: "Convert meeting videos into structured Markdown minutes."
 version: 1.0.0
-author: Tadashi Shigeoka, Hermes Agent
+author: Tadashi Shigeoka
 license: MIT
 platforms: [linux, macos]
 allowed-tools: [terminal, read_file, write_file, search_files, vision_analyze]
