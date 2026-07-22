@@ -56,3 +56,7 @@ Never commit secrets to this repository.
 ## License
 
 [MIT](LICENSE)
+
+## Review smoke test
+
+This line exists to provide a small, harmless change for validating automated pull request review workflows.
