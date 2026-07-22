@@ -1,0 +1,4 @@
+interface:
+  display_name: "PR Multi Review"
+  short_description: "Review a PR with Claude Code and Codex"
+  default_prompt: "Use $omh-pr-multi-review to review a GitHub PR URL and aggregate the findings."
