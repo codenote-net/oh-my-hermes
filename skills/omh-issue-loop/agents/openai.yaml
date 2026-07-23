@@ -1,0 +1,4 @@
+interface:
+  display_name: "Issue Implementation Loop"
+  short_description: "Drive a GitHub issue to a review-ready PR"
+  default_prompt: "Use $omh-issue-loop to implement a GitHub issue through iterative reviews and produce a review-ready PR."
