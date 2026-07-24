@@ -15,11 +15,12 @@ implement, fix, review, merge, close the issue, or widen scope in the orchestrat
 Use these settings verbatim on every applicable child invocation:
 
 - **Codex CLI**: `model="gpt-5.6-sol"`, `model_reasoning_effort="low"`, `service_tier="fast"`
+  - Pass `--yolo` before the `exec` or `review` subcommand.
   - Implementation prompt: `/goal <issue-url>`
   - Local review prompt: `/review`
   - Fix only high-priority findings without widening scope.
 - **Claude Code CLI**: model `Opus 4.8`, reasoning effort `high`
-  - Pass `--model claude-opus-4-8 --effort high -p`.
+  - Pass `--permission-mode auto --model claude-opus-4-8 --effort high -p`.
   - Local review prompt: `/code-review`
   - Security review prompt: `/security-review`
   - PR review prompt: `/review #<pr-number>`
@@ -28,13 +29,14 @@ Use these settings verbatim on every applicable child invocation:
 Apply Codex settings per process; never edit global configuration. Use this command shape:
 
 ```bash
-codex exec --ephemeral -c model='"gpt-5.6-sol"' \
+codex --yolo exec --ephemeral -c model='"gpt-5.6-sol"' \
   -c model_reasoning_effort='"low"' -c service_tier='"fast"' '<PROMPT>'
 ```
 
-Use `claude -p --model claude-opus-4-8 --effort high --no-session-persistence '<PROMPT>'`
-for Claude Code. Give every reviewer the issue URL, current branch or PR target, repository
-instructions, and a request to label each finding `critical`, `high`, `medium`, or `low`.
+Use `claude --permission-mode auto -p --model claude-opus-4-8 --effort high
+--no-session-persistence '<PROMPT>'` for Claude Code. Give every reviewer the issue URL, current
+branch or PR target, repository instructions, and a request to label each finding `critical`,
+`high`, `medium`, or `low`.
 
 ## Responsibility boundary
 
