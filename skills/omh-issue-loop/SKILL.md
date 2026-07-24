@@ -203,9 +203,9 @@ not mistaken for a successful continuation.
    findings merely to force convergence; retain the reviewer's evidence and stated severity.
 9. If zero high-priority findings remain and every review completed, leave the local loop.
 10. Otherwise, if ten fix invocations have already completed, stop before an eleventh, summarize
-   repeated and unresolved findings, preserve the branch, and ask the user to decide. Never open
-   or ready a PR while this safety valve is active. If fewer than ten fixes have run, increment
-   the shared fix count and continue.
+   repeated and unresolved findings, preserve the branch, execute the fix-limit human handoff
+   below, and ask the user to decide. Never open or ready a PR while this safety valve is active.
+   If fewer than ten fixes have run, increment the shared fix count and continue.
 11. Invoke Codex with the complete high-priority findings, complete immutable issue snapshot,
     no-refetch instruction, and the same strict restrictions and report contract used by the
     implementation prompt, followed by this task instruction:
@@ -253,7 +253,53 @@ not mistaken for a successful continuation.
    restrictions and mandatory side-effect check, to fix only the current high-priority findings
    and rerun affected validation. Then repeat the three local reviews until clean. The
    orchestrator commits and pushes normally, reruns PR review and fresh-worktree verification at
-   the new head, and repeats. Never amend, rebase, force push, or hide earlier review artifacts.
+   the new head, and repeats. When ten fix invocations have completed without convergence, stop
+   before an eleventh and execute the fix-limit human handoff below. Never amend, rebase, force
+   push, or hide earlier review artifacts.
+
+## Fix-limit human handoff
+
+When the shared ten-fix limit is exhausted, the orchestrator must leave a durable progress
+comment before returning control to the user. This is a stop-path handoff, not a successful
+completion signal. Do not create a PR solely to hold this comment.
+
+1. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
+2. Determine the comment target from orchestration state:
+   - If a PR has already been created for this run, comment on that PR with `gh pr comment`,
+     whether it is still draft or ready.
+   - If no PR has been created, comment on the original issue with `gh issue comment
+     <issue-url>`. This comment operation does not replace or refresh the immutable issue
+     snapshot, and the orchestrator must not run another `gh issue view`.
+3. Build a progress summary containing:
+   - phase reached (`local` or `PR`) and `10/10` fixes used;
+   - branch, current HEAD SHA, and PR URL when one exists;
+   - changed files and the latest validation results;
+   - each completed review artifact, its target SHA, status, and high-priority count;
+   - repeated and unresolved findings, blockers, and the exact reason convergence failed;
+   - the explicit next action: the mentioned human must review the progress and decide whether
+     to continue manually or start a new run.
+4. Append the idempotency marker
+   `<!-- omh-issue-loop-fix-limit:<current-head-sha> -->`. Inspect comments on the selected target
+   first; if that exact marker exists, reuse the existing comment and do not post a duplicate.
+5. Post exactly one comment with this shape, substituting the complete progress summary:
+
+   ```text
+   @<login> The omh-issue-loop fix limit was reached after 10/10 fix attempts.
+   Automated work has stopped before an eleventh attempt.
+
+   <progress summary>
+
+   Please review this progress and decide whether to continue manually or start a new run.
+
+   <!-- omh-issue-loop-fix-limit:<current-head-sha> -->
+   ```
+
+6. Read the selected target's comments back and require one comment to contain the exact
+   `@<login>` mention and marker. Record its URL. If posting or verification fails, remain stopped
+   and report both the exhausted fix limit and the handoff failure; never resume the loop, create
+   or ready a PR, or claim successful completion.
+7. Include the selected target type, target URL, mentioned login, and verified comment URL in the
+   stop report.
 
 ## Complete the PR
 
@@ -318,4 +364,6 @@ Before declaring completion, require this hard checklist:
 Stop safely and request user direction when authentication is unavailable, repository identity
 does not match, the worktree is dirty, required validation cannot run, a child review is
 incomplete, changes escape issue scope, a branch already exists, or ten fix iterations do not
-converge. Preserve evidence and never treat a tooling failure as approval.
+converge. On fix-limit exhaustion, complete the mandatory PR-or-issue human handoff before
+returning whenever GitHub access is available. Preserve evidence and never treat a tooling failure
+as approval.
