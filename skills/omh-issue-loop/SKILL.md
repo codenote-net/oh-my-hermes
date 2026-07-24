@@ -16,7 +16,7 @@ Use these settings verbatim on every applicable child invocation:
 
 - **Codex CLI**: `model="gpt-5.6-sol"`, `model_reasoning_effort="low"`, `service_tier="fast"`
   - Pass `--yolo` before the `exec` or `review` subcommand.
-  - Implementation prompt: `/goal <issue-url>`
+  - Implementation prompt: `/goal`, followed by the parent-provided issue snapshot.
   - Local review prompt: `/review`
   - Fix only high-priority findings without widening scope.
 - **Claude Code CLI**: model `Opus 4.8`, reasoning effort `high`
@@ -34,15 +34,34 @@ codex --yolo exec --ephemeral -c model='"gpt-5.6-sol"' \
 ```
 
 Use `claude --permission-mode auto -p --model claude-opus-4-8 --effort high
---no-session-persistence '<PROMPT>'` for Claude Code. Give every reviewer the issue URL, current
-branch or PR target, repository instructions, and a request to label each finding `critical`,
-`high`, `medium`, or `low`.
+--no-session-persistence '<PROMPT>'` for Claude Code. Give every child the parent-captured issue
+snapshot and explicitly forbid it from fetching the issue again. Give every reviewer the issue
+URL for provenance, current branch or PR target, repository instructions, and a request to label
+each finding `critical`, `high`, `medium`, or `low`.
+
+## Single-fetch issue snapshot
+
+The orchestrator is the only process allowed to fetch the issue. Run exactly one
+`gh issue view` for the specified issue during preflight and preserve its exact JSON output as an
+immutable issue snapshot for the entire run. Do not refresh it, including after implementation,
+during side-effect checks, in review loops, or before final reporting.
+
+Include the complete snapshot verbatim in every Codex and Claude Code child prompt inside a
+clearly delimited `ISSUE SNAPSHOT` block. Tell each child that the snapshot is authoritative and
+that it must not run `gh issue view`, `gh api` for the issue, or otherwise fetch or mutate the
+issue. This applies to initial implementation, every fix worker, all local and PR reviews, and
+fresh-worktree behavior verification. Passing only the issue URL is insufficient.
+
+Keep the issue URL in prompts only as provenance. Never use URL-based slash-command syntax that
+causes a child to fetch the issue implicitly. If the one preflight fetch fails or its JSON is
+incomplete, stop; never delegate issue retrieval to a child.
 
 ## Responsibility boundary
 
 Treat Codex implementation and fix processes as working-tree workers, not autonomous issue
-owners. They may read the issue and repository instructions, edit only issue-scoped files, run
-relevant local validation, and report their work. They must leave all changes uncommitted.
+owners. They may read the parent-provided issue snapshot and repository instructions, edit only
+issue-scoped files, run relevant local validation, and report their work. They must leave all
+changes uncommitted and must not retrieve live issue data.
 
 Only the orchestrator may run reviews, create commits, push branches, create or edit pull
 requests, mark a PR ready, inspect PR checks, update the issue or PR, or perform final reporting.
@@ -62,8 +81,17 @@ the worker to infer the boundary from the surrounding workflow.
    the agent to its human operator. Never hardcode a username.
 4. Resolve the current repository root and `gh repo view --json nameWithOwner,defaultBranchRef`.
    Compare `nameWithOwner` case-insensitively with the URL owner/repository and stop on mismatch.
-5. Read the issue with `gh issue view <issue-url>`. Preserve its title, body, acceptance criteria,
-   labels, and number as the authoritative scope.
+5. Fetch the issue exactly once:
+
+   ```bash
+   gh issue view <issue-url> \
+     --json number,title,body,labels,state,url,author,assignees,milestone,createdAt,updatedAt
+   ```
+
+   Require valid JSON containing at least the matching URL and number, a non-empty title, and the
+   body and labels fields. Preserve the exact output as the immutable issue snapshot. Derive the
+   title, body, acceptance criteria, labels, and number only from this snapshot. Do not run
+   `gh issue view` again anywhere in the workflow.
 6. Inspect `git status --short --branch` and require no status entries after its branch header;
    equivalently, require `git status --porcelain` to be empty. Never stash, discard, overwrite, or
    absorb pre-existing changes.
@@ -73,9 +101,9 @@ the worker to infer the boundary from the surrounding workflow.
 8. Fetch the dynamically discovered default branch and create a new branch from its latest remote
    tip. Name it `omh/issue-<number>-<short-topic>`, with a short lowercase hyphenated topic. Stop if
    that local or remote branch already exists; never reset or reuse it implicitly.
-9. Record the base commit, issue URL, branch, human-review target, validation plan, review outputs,
-   finding counts, and fix iteration count in the orchestration state. Set a total maximum of five
-   fix iterations across the local and PR loops.
+9. Record the base commit, issue URL, immutable issue snapshot, branch, human-review target,
+   validation plan, review outputs, finding counts, and fix iteration count in the orchestration
+   state. Set a total maximum of five fix iterations across the local and PR loops.
 
 ### Safe reruns after an abandoned attempt
 
@@ -97,14 +125,24 @@ not mistaken for a successful continuation.
    - all PRs for the branch from
      `gh pr list --repo <owner>/<repo> --head <branch-name> --state all`, plus enough `gh pr view`
      metadata to detect edits, readiness, state, body, title, and head changes;
-   - issue state and mutable metadata from `gh issue view`.
-2. Invoke Codex with this complete prompt, substituting the actual issue URL:
+   - the immutable issue snapshot captured during preflight; do not fetch the issue again for the
+     baseline.
+2. Invoke Codex with this complete prompt, substituting the actual snapshot and issue URL:
 
    ```text
-   /goal <issue-url>
+   /goal
 
    You are the implementation worker for this issue. Implement the issue and run the relevant
    local validation only.
+
+   ISSUE URL (provenance only): <issue-url>
+
+   ----- BEGIN ISSUE SNAPSHOT -----
+   <exact JSON captured by the orchestrator's single gh issue view>
+   ----- END ISSUE SNAPSHOT -----
+
+   The issue snapshot above is authoritative. Do not run `gh issue view`, call `gh api` for this
+   issue, or otherwise fetch the issue. Do not infer missing requirements from live GitHub state.
 
    Strict restrictions:
    - Do not create, amend, or reset any commit.
@@ -117,9 +155,9 @@ not mistaken for a successful continuation.
    - Do not modify generated files unless they are explicitly required by the issue or repository
      workflow.
 
-   Before making changes, read the repository instructions and the issue carefully. Work only in
-   the current branch. Leave the implementation changes uncommitted in the working tree so that
-   the orchestrator can review them before committing and pushing.
+   Before making changes, read the repository instructions and the issue snapshot carefully. Work
+   only in the current branch. Leave the implementation changes uncommitted in the working tree
+   so that the orchestrator can review them before committing and pushing.
 
    At the end, report only:
    1. The files changed.
@@ -137,10 +175,11 @@ not mistaken for a successful continuation.
    - compare the branch reflog with the baseline and reject evidence of commit, amend, or reset;
    - compare the remote branch OID with the baseline and reject creation or movement of the
      remote branch;
-   - compare the complete branch PR snapshot and issue snapshot with their baselines and reject
-     any creation, edit, readiness, state, or content change;
+   - compare the complete branch PR snapshot with its baseline and reject any creation, edit,
+     readiness, state, or content change;
    - inspect captured worker output for prohibited Git/GitHub, CI-monitoring, or review commands,
-     even when their observable remote state did not change;
+     including any attempt to fetch or mutate the issue, even when its observable remote state was
+     not re-read;
    - inspect status and diffs, including staged and untracked files, and require every change to
      be necessary for the issue or an explicitly required repository-generated artifact.
 4. If any check fails or cannot be completed, stop immediately and report an orchestration
@@ -148,7 +187,8 @@ not mistaken for a successful continuation.
    local reviews, create or update a PR, invoke another worker, or perform further PR operations.
 5. If every check passes, preserve the worker report and continue. The orchestrator must not
    repair the implementation itself.
-6. Capture these three independent review artifacts:
+6. Capture these three independent review artifacts. Include the complete immutable issue
+   snapshot and the no-refetch instruction in every review prompt:
    - Codex `/review` against the branch diff from the recorded base.
    - Claude Code `/code-review` against the same diff.
    - Claude Code `/security-review` against the same diff.
@@ -166,8 +206,9 @@ not mistaken for a successful continuation.
    repeated and unresolved findings, preserve the branch, and ask the user to decide. Never open
    or ready a PR while this safety valve is active. If fewer than five fixes have run, increment
    the shared fix count and continue.
-11. Invoke Codex with the complete high-priority findings and the same strict restrictions and
-    report contract used by the implementation prompt, followed by this task instruction:
+11. Invoke Codex with the complete high-priority findings, complete immutable issue snapshot,
+    no-refetch instruction, and the same strict restrictions and report contract used by the
+    implementation prompt, followed by this task instruction:
 
    ```text
    Fix the high-priority findings from the Codex review, Claude Code review, and Claude Code
@@ -191,7 +232,8 @@ not mistaken for a successful continuation.
    repository-provided signoff command when its instructions require one. Do not replace that
    procedure with a plain `git push`. Never use force push or rewrite history. Open a draft PR
    only after required publication or signoff succeeds. Record every commit in `<base>..HEAD`.
-4. Run all five review checks for the exact current PR head SHA. Draft-PR CI success, signoff
+4. Run all five review checks for the exact current PR head SHA. Include the complete immutable
+   issue snapshot and no-refetch instruction in every child prompt. Draft-PR CI success, signoff
    success, or a skipped automated reviewer is not a substitute for a missing review artifact:
    - Codex `/review` locally.
    - Claude Code `/code-review` locally.
@@ -199,10 +241,12 @@ not mistaken for a successful continuation.
    - Claude Code `/review #<pr-number>` against the PR.
    - Claude Code behavior verification in a fresh worktree.
 5. For fresh-worktree verification, create a separate temporary worktree at the exact remote PR
-   head, read the issue and repository instructions, run or exercise the real behavior and the
-   relevant discovered validation commands, and return prioritized evidence. Do not edit the
-   primary worktree. Remove only the temporary worktree after its process has finished; retain its
-   report. Treat setup, checkout, or validation failure as an incomplete gate, not zero findings.
+   head, pass the immutable issue snapshot into the verifier prompt, read the repository
+   instructions, run or exercise the real behavior and the relevant discovered validation
+   commands, and return prioritized evidence. The verifier must not fetch the issue. Do not edit
+   the primary worktree. Remove only the temporary worktree after its process has finished; retain
+   its report. Treat setup, checkout, or validation failure as an incomplete gate, not zero
+   findings.
 6. Aggregate high-priority counts separately for all five sources. If every source completed with
    zero high-priority findings at the same SHA, exit the PR loop.
 7. Otherwise apply the same shared five-fix safety valve. Ask Codex, under the complete worker
@@ -225,8 +269,8 @@ Before declaring completion, require this hard checklist:
   preserving the draft.
 - Require one verified PR comment that mentions the recorded `gh` user and requests final human
   review for the exact reviewed head SHA.
-- Generate the final report only after every item passes. If the PR or issue changed externally,
-  re-read it and report the discrepancy instead of relying on an earlier snapshot.
+- Generate the final report only after every item passes. Re-read PR state when necessary, but
+  never re-fetch the issue; final issue reporting must use the immutable preflight snapshot.
 
 1. Update the PR body with:
    - implementation summary;
