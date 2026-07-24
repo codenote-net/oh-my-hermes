@@ -56,22 +56,26 @@ the worker to infer the boundary from the surrounding workflow.
 2. Require `gh`, `git`, `claude`, and `codex` on `PATH`. Verify authentication with
    `gh auth status`, `claude auth status`, and `codex login status`. Stop with the matching login
    command when a check fails.
-3. Resolve the current repository root and `gh repo view --json nameWithOwner,defaultBranchRef`.
+3. Resolve the current human-review target with `gh api user --jq .login`. Require a non-empty
+   GitHub login and record it in orchestration state. This is intentionally the same account whose
+   `gh` authentication runs the loop; self-mentioning that account is the explicit handoff from
+   the agent to its human operator. Never hardcode a username.
+4. Resolve the current repository root and `gh repo view --json nameWithOwner,defaultBranchRef`.
    Compare `nameWithOwner` case-insensitively with the URL owner/repository and stop on mismatch.
-4. Read the issue with `gh issue view <issue-url>`. Preserve its title, body, acceptance criteria,
+5. Read the issue with `gh issue view <issue-url>`. Preserve its title, body, acceptance criteria,
    labels, and number as the authoritative scope.
-5. Inspect `git status --short --branch` and require no status entries after its branch header;
+6. Inspect `git status --short --branch` and require no status entries after its branch header;
    equivalently, require `git status --porcelain` to be empty. Never stash, discard, overwrite, or
    absorb pre-existing changes.
-6. Discover repository instructions and validation commands from applicable `AGENTS.md`,
+7. Discover repository instructions and validation commands from applicable `AGENTS.md`,
    `CLAUDE.md`, `README`, manifests such as `package.json`, build files, and CI configuration.
    Do not hardcode build, test, lint, or formatting commands.
-7. Fetch the dynamically discovered default branch and create a new branch from its latest remote
+8. Fetch the dynamically discovered default branch and create a new branch from its latest remote
    tip. Name it `omh/issue-<number>-<short-topic>`, with a short lowercase hyphenated topic. Stop if
    that local or remote branch already exists; never reset or reuse it implicitly.
-8. Record the base commit, issue URL, branch, validation plan, review outputs, finding counts, and
-   fix iteration count in the orchestration state. Set a total maximum of five fix iterations
-   across the local and PR loops.
+9. Record the base commit, issue URL, branch, human-review target, validation plan, review outputs,
+   finding counts, and fix iteration count in the orchestration state. Set a total maximum of five
+   fix iterations across the local and PR loops.
 
 ### Safe reruns after an abandoned attempt
 
@@ -219,6 +223,8 @@ Before declaring completion, require this hard checklist:
   for a review gate.
 - Require `gh pr ready` to succeed and verify `isDraft: false`, unless a stop condition requires
   preserving the draft.
+- Require one verified PR comment that mentions the recorded `gh` user and requests final human
+  review for the exact reviewed head SHA.
 - Generate the final report only after every item passes. If the PR or issue changed externally,
   re-read it and report the discrepancy instead of relying on an earlier snapshot.
 
@@ -238,10 +244,30 @@ Before declaring completion, require this hard checklist:
    direct evidence.
 4. Reconfirm that the PR head SHA matches the fully reviewed SHA, then mark the draft ready with
    `gh pr ready`. Never merge the PR or close the issue.
-5. Ask a human to perform the final review and merge decision.
-6. Return a concise report containing the issue URL, branch, PR URL, commits created by Codex,
-   high-priority finding count for each of the five sources, validation results, and every
-   unresolved finding.
+5. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
+   Inspect existing PR comments for the marker
+   `<!-- omh-issue-loop-human-review:<reviewed-head-sha> -->`. If that exact marker already exists,
+   reuse the comment and do not post a duplicate. Otherwise, after `isDraft: false` is verified,
+   post exactly one PR comment with this content, substituting the login and full reviewed SHA:
+
+   ```text
+   @<login> Human review requested. All automated implementation, validation, and review gates
+   passed for <reviewed-head-sha>. Please perform the final review and decide whether to merge.
+
+   <!-- omh-issue-loop-human-review:<reviewed-head-sha> -->
+   ```
+
+   Use `gh pr comment` so the at-mention and handoff are visible on the PR. Notification behavior
+   depends on GitHub settings, especially for self-mentions; the durable PR comment is the required
+   handoff record. Do not use a formal reviewer assignment because GitHub may reject assigning the
+   authenticated user to review their own PR.
+6. Read the PR comments back and require one comment to contain both the exact `@<login>` mention
+   and exact head-SHA marker. If posting or verification fails, do not claim orchestration
+   completion; report the ready PR and the handoff failure for the user to resolve.
+7. Ask the mentioned human to perform the final review and merge decision.
+8. Return a concise report containing the issue URL, branch, PR URL, commits created by Codex,
+   high-priority finding count for each of the five sources, validation results, every unresolved
+   finding, the mentioned login, and the verified review-request comment URL.
 
 ## Stop conditions
 
