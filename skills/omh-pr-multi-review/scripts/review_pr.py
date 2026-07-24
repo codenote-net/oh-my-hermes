@@ -136,14 +136,15 @@ def main() -> int:
             ("code-review", "Claude Code `/code-review` results"),
         ):
             code, text = run(
-                ["claude", "-p", "--model", CLAUDE_MODEL, "--effort", "high",
+                ["claude", "--permission-mode", "auto", "-p", "--model", CLAUDE_MODEL,
+                 "--effort", "high",
                  "--no-session-persistence", f"/{slash_command} {args.pr_url}"],
                 args.timeout, top,
             )
             results.append((heading, code, text))
 
         codex_command = [
-            "codex", "review", "-c", f'model="{CODEX_MODEL}"',
+            "codex", "--yolo", "review", "-c", f'model="{CODEX_MODEL}"',
             "-c", 'model_reasoning_effort="high"', "-c", 'service_tier="priority"',
             "--base", base_ref,
         ]
@@ -174,9 +175,9 @@ def main() -> int:
             "say so. Return concise Markdown bullets only; do not modify files."
         )
         summary_code, summary_text = run(
-            ["codex", "exec", "-c", f'model="{CODEX_MODEL}"',
+            ["codex", "--yolo", "exec", "-c", f'model="{CODEX_MODEL}"',
              "-c", 'model_reasoning_effort="high"', "-c", 'service_tier="priority"',
-             "--ephemeral", "--sandbox", "read-only", "--skip-git-repo-check", "-C", str(top), prompt],
+             "--ephemeral", "--skip-git-repo-check", "-C", str(top), prompt],
             args.timeout, top,
         )
         if summary_code == 0:
@@ -189,8 +190,8 @@ def main() -> int:
         f"# PR Review: {metadata['title']} (#{metadata['number']})\n\n"
         f"- URL: {metadata['url']}\n"
         f"- Executed: {timestamp}\n"
-        f"- Claude Code: `{CLAUDE_MODEL}`, effort `high`, non-interactive `-p`\n"
-        f"- Codex: `{CODEX_MODEL}`, reasoning effort `high`, service tier `priority` (Fast), base `{metadata['baseRefName']}`\n\n"
+        f"- Claude Code: `{CLAUDE_MODEL}`, effort `high`, permission mode `auto`, non-interactive `-p`\n"
+        f"- Codex: `{CODEX_MODEL}`, reasoning effort `high`, service tier `priority` (Fast), `--yolo`, base `{metadata['baseRefName']}`\n\n"
         f"{review_context}\n\n## Summary\n\n{summary.strip()}\n"
     )
     output_path.parent.mkdir(parents=True, exist_ok=True)

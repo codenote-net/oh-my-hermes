@@ -22,6 +22,8 @@ decisions, owners, or due dates that are absent from the recording.
 
 ## Model Routing
 
+- Include `--yolo` before the subcommand in every Codex CLI model invocation.
+- Include `--permission-mode auto` in every Claude CLI model invocation.
 - Run the main workflow in Codex CLI with the exact model ID `gpt-5.6-luna`. It owns input
   collection, file handling, media extraction, transcription orchestration, verification, and
   the final result returned to Hermes.
@@ -35,7 +37,7 @@ Use the dedicated Codex CLI model option; do not rewrite the user's global Codex
 and do not describe the model as the ambiguous phrase "gpt-5.6 in Luna mode":
 
 ```bash
-codex exec --model gpt-5.6-luna \
+codex --yolo exec --model gpt-5.6-luna \
   --config model_reasoning_effort='"low"' \
   --ephemeral --skip-git-repo-check \
   -C "<ABSOLUTE_OUTPUT_DIR>" \
@@ -169,8 +171,7 @@ default for normal use; choose a distinct ID only for an intentionally independe
    and draft output. Start a non-interactive Claude CLI process through `terminal`:
 
    ```bash
-   claude --print --model claude-haiku-4-5 --no-session-persistence \
-     --permission-mode acceptEdits \
+   claude --permission-mode auto --print --model claude-haiku-4-5 --no-session-persistence \
      "Read the complete transcript at <ABSOLUTE_TRANSCRIPT_PATH> and the capture files under \
    <ABSOLUTE_CAPTURE_DIR>. Draft grounded Japanese meeting minutes at <ABSOLUTE_DRAFT_PATH> \
    using Highlights, Decisions, Action Items, Detailed Minutes, and Reference: Capture Images. \
@@ -185,7 +186,7 @@ default for normal use; choose a distinct ID only for an intentionally independe
 7. **Verify with the main model.** Start a second Codex CLI pass with the exact same model ID:
 
    ```bash
-   codex exec --model gpt-5.6-luna \
+   codex --yolo exec --model gpt-5.6-luna \
      --config model_reasoning_effort='"low"' \
      --ephemeral --skip-git-repo-check \
      -C "<ABSOLUTE_OUTPUT_DIR>" \
