@@ -248,7 +248,8 @@ not mistaken for a successful continuation.
    its report. Treat setup, checkout, or validation failure as an incomplete gate, not zero
    findings.
 6. Aggregate high-priority counts separately for all five sources. If every source completed with
-   zero high-priority findings at the same SHA, exit the PR loop.
+   zero high-priority findings at the same SHA, proceed to the CI gate below; review success alone
+   is not completion.
 7. Otherwise apply the same shared ten-fix safety valve. Ask Codex, under the complete worker
    restrictions and mandatory side-effect check, to fix only the current high-priority findings
    and rerun affected validation. Then repeat the three local reviews until clean. The
@@ -257,13 +258,57 @@ not mistaken for a successful continuation.
    before an eleventh and execute the fix-limit human handoff below. Never amend, rebase, force
    push, or hide earlier review artifacts.
 
+## Required green CI gate
+
+After all five review sources are clean for the exact PR head SHA, require every applicable
+GitHub PR CI check for that same SHA to complete successfully. This gate must pass before
+`gh pr ready`, the final human-review at-mention, or a successful completion report.
+
+1. Record the current PR head SHA, then inspect all checks with `gh pr checks <pr-url> --json
+   name,state,bucket,link,workflow`. Use `gh pr checks <pr-url> --watch` while any check is pending,
+   and re-read the complete JSON after watch mode exits. Exit code 8 or a `pending` bucket means
+   the gate is still incomplete, never green.
+2. Require every applicable CI check to have bucket `pass`. Do not treat pending, failed,
+   cancelled, timed-out, action-required, stale, or missing expected checks as green. A skipped
+   check is acceptable only when repository configuration makes it explicitly non-applicable;
+   record the evidence instead of silently treating every skip as success. If repository
+   workflows or required checks are configured but no check is reported for the head SHA, treat
+   the gate as incomplete. If the repository genuinely has no CI configured, record that fact
+   explicitly as the gate result.
+3. Re-read the PR head SHA after collecting the terminal check set. If it differs from the
+   reviewed SHA, discard the stale result and restart all five reviews for the new head before
+   checking CI again.
+4. If every applicable check is green, preserve the exact check names, states, links, and verified
+   head SHA in orchestration state, then continue to PR completion. Do not post any at-mention
+   comment before this point.
+5. If a check is red, inspect its available GitHub Actions logs and failure evidence. Distinguish
+   an actionable implementation failure from an external infrastructure, permission, quota, or
+   flaky-service failure. Never modify code merely to hide or bypass a failing check.
+6. For an actionable failure, count the repair against the shared ten-fix limit and invoke Codex
+   as a restricted fix worker with the immutable issue snapshot, exact failing check evidence,
+   and the same report contract and mandatory post-execution side-effect check. The worker must
+   not monitor CI or perform reviews.
+7. After a successful worker fix, run affected local validation and the repository-required final
+   checks. The orchestrator then creates a new signed commit and pushes normally. Run all five
+   review sources for the new exact head SHA before returning to this CI gate. Never skip reviews
+   because the change only fixes CI.
+8. If the red check is not actionable from the repository, required logs are unavailable, or the
+   check cannot be rerun safely, stop with the check name, URL, evidence, and blocker. Do not mark
+   the PR ready and do not post an at-mention comment.
+9. If the shared ten-fix limit is exhausted by CI repairs, stop before an eleventh attempt and
+   execute the fix-limit progress handoff below. Because CI is not green, that progress comment
+   must not contain an at-mention.
+
 ## Fix-limit human handoff
 
 When the shared ten-fix limit is exhausted, the orchestrator must leave a durable progress
 comment before returning control to the user. This is a stop-path handoff, not a successful
 completion signal. Do not create a PR solely to hold this comment.
 
-1. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
+1. Determine whether the required green CI gate has passed for the exact current head SHA. Only
+   when it has passed may this stop-path comment mention the recorded human-review target.
+   Otherwise post the same progress comment without any `@<login>` text. This preserves the rule
+   that no at-mention is posted before CI is green.
 2. Determine the comment target from orchestration state:
    - If a PR has already been created for this run, comment on that PR with `gh pr comment`,
      whether it is still draft or ready.
@@ -276,15 +321,17 @@ completion signal. Do not create a PR solely to hold this comment.
    - changed files and the latest validation results;
    - each completed review artifact, its target SHA, status, and high-priority count;
    - repeated and unresolved findings, blockers, and the exact reason convergence failed;
-   - the explicit next action: the mentioned human must review the progress and decide whether
-     to continue manually or start a new run.
+   - the explicit next action: the human must review the progress and decide whether to continue
+     manually or start a new run.
 4. Append the idempotency marker
    `<!-- omh-issue-loop-fix-limit:<current-head-sha> -->`. Inspect comments on the selected target
    first; if that exact marker exists, reuse the existing comment and do not post a duplicate.
-5. Post exactly one comment with this shape, substituting the complete progress summary:
+5. Post exactly one comment with this shape, substituting the complete progress summary. Include
+   the first-line `@<login>` prefix only when the green CI gate passed for this exact HEAD;
+   otherwise start with `The omh-issue-loop...` and do not include an at-mention anywhere:
 
    ```text
-   @<login> The omh-issue-loop fix limit was reached after 10/10 fix attempts.
+   [@<login> ]The omh-issue-loop fix limit was reached after 10/10 fix attempts.
    Automated work has stopped before an eleventh attempt.
 
    <progress summary>
@@ -294,12 +341,13 @@ completion signal. Do not create a PR solely to hold this comment.
    <!-- omh-issue-loop-fix-limit:<current-head-sha> -->
    ```
 
-6. Read the selected target's comments back and require one comment to contain the exact
-   `@<login>` mention and marker. Record its URL. If posting or verification fails, remain stopped
+6. Read the selected target's comments back and require one comment to contain the marker. When CI
+   was green, also require the exact `@<login>` mention; when CI was not green, require that the
+   comment contain no at-mention. Record its URL. If posting or verification fails, remain stopped
    and report both the exhausted fix limit and the handoff failure; never resume the loop, create
    or ready a PR, or claim successful completion.
-7. Include the selected target type, target URL, mentioned login, and verified comment URL in the
-   stop report.
+7. Include the selected target type, target URL, whether an at-mention was permitted, mentioned
+   login when applicable, and verified comment URL in the stop report.
 
 ## Complete the PR
 
@@ -309,8 +357,8 @@ Before declaring completion, require this hard checklist:
 - Include review results and counts, validation results, unresolved findings, and the exact
   closing-keyword line in the PR body.
 - Re-read final PR metadata and require its head SHA to match the reviewed SHA.
-- Inspect every required CI and signoff check, while never treating CI success as a replacement
-  for a review gate.
+- Require the green CI gate to have passed for the exact reviewed head SHA and include every check
+  result, while never treating CI success as a replacement for a review gate.
 - Require `gh pr ready` to succeed and verify `isDraft: false`, unless a stop condition requires
   preserving the draft.
 - Require one verified PR comment that mentions the recorded `gh` user and requests final human
@@ -332,13 +380,15 @@ Before declaring completion, require this hard checklist:
    are resolved while the PR is unmerged. Record the baseline count and state that GitHub
    recalculates alert state after merge unless a supported branch-specific API or check provides
    direct evidence.
-4. Reconfirm that the PR head SHA matches the fully reviewed SHA, then mark the draft ready with
-   `gh pr ready`. Never merge the PR or close the issue.
+4. Reconfirm that the PR head SHA matches both the fully reviewed SHA and the SHA whose complete
+   CI check set passed the green gate. Only then mark the draft ready with `gh pr ready`. Never
+   merge the PR or close the issue.
 5. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
    Inspect existing PR comments for the marker
    `<!-- omh-issue-loop-human-review:<reviewed-head-sha> -->`. If that exact marker already exists,
-   reuse the comment and do not post a duplicate. Otherwise, after `isDraft: false` is verified,
-   post exactly one PR comment with this content, substituting the login and full reviewed SHA:
+   reuse the comment and do not post a duplicate. Otherwise, only after green CI and
+   `isDraft: false` are both verified, post exactly one PR comment with this content, substituting
+   the login and full reviewed SHA:
 
    ```text
    @<login> Human review requested. All automated implementation, validation, and review gates
