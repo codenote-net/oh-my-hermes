@@ -103,7 +103,7 @@ the worker to infer the boundary from the surrounding workflow.
    that local or remote branch already exists; never reset or reuse it implicitly.
 9. Record the base commit, issue URL, immutable issue snapshot, branch, human-review target,
    validation plan, review outputs, finding counts, and fix iteration count in the orchestration
-   state. Set a total maximum of five fix iterations across the local and PR loops.
+   state. Set a total maximum of ten fix iterations across the local and PR loops.
 
 ### Safe reruns after an abandoned attempt
 
@@ -202,9 +202,9 @@ not mistaken for a successful continuation.
    as blocker or severe exploitable vulnerability) as high priority. Do not promote ambiguous
    findings merely to force convergence; retain the reviewer's evidence and stated severity.
 9. If zero high-priority findings remain and every review completed, leave the local loop.
-10. Otherwise, if five fix invocations have already completed, stop before a sixth, summarize
+10. Otherwise, if ten fix invocations have already completed, stop before an eleventh, summarize
    repeated and unresolved findings, preserve the branch, and ask the user to decide. Never open
-   or ready a PR while this safety valve is active. If fewer than five fixes have run, increment
+   or ready a PR while this safety valve is active. If fewer than ten fixes have run, increment
    the shared fix count and continue.
 11. Invoke Codex with the complete high-priority findings, complete immutable issue snapshot,
     no-refetch instruction, and the same strict restrictions and report contract used by the
@@ -249,7 +249,7 @@ not mistaken for a successful continuation.
    findings.
 6. Aggregate high-priority counts separately for all five sources. If every source completed with
    zero high-priority findings at the same SHA, exit the PR loop.
-7. Otherwise apply the same shared five-fix safety valve. Ask Codex, under the complete worker
+7. Otherwise apply the same shared ten-fix safety valve. Ask Codex, under the complete worker
    restrictions and mandatory side-effect check, to fix only the current high-priority findings
    and rerun affected validation. Then repeat the three local reviews until clean. The
    orchestrator commits and pushes normally, reruns PR review and fresh-worktree verification at
@@ -317,5 +317,5 @@ Before declaring completion, require this hard checklist:
 
 Stop safely and request user direction when authentication is unavailable, repository identity
 does not match, the worktree is dirty, required validation cannot run, a child review is
-incomplete, changes escape issue scope, a branch already exists, or five fix iterations do not
+incomplete, changes escape issue scope, a branch already exists, or ten fix iterations do not
 converge. Preserve evidence and never treat a tooling failure as approval.
