@@ -36,7 +36,7 @@ python3 "$SKILL_DIR/scripts/review_pr.py" \
 
 The script invokes these configurations:
 
-- Claude Code: `claude --permission-mode auto -p --model claude-opus-4-8 --effort high`, once
+- Claude Code: `claude --permission-mode auto -p --model claude-opus-5 --effort high`, once
   for each of `/review <PR_URL>`, `/security-review <PR_URL>`, and `/code-review <PR_URL>`.
 - Codex: `codex --yolo review --base <remote-base>` with `model="gpt-5.6-sol"`,
   `model_reasoning_effort="high"`, and `service_tier="priority"` (the current CLI's Fast tier).
