@@ -10,6 +10,10 @@ all independent review and behavior verification to Claude Code CLI. Keep every 
 remote, pull-request, issue, CI, and review operation under exclusive orchestrator control. Never
 implement, fix, review, merge, close the issue, or widen scope in the orchestrating agent.
 
+Before starting, read [workflow-flowchart.md](references/workflow-flowchart.md) to understand the
+end-to-end phases, ownership boundaries, loops, stop paths, CI gate, and Human handoff. Use it as
+the workflow map; this file remains the authoritative source for detailed requirements.
+
 ## Fixed execution configuration
 
 Use these settings verbatim on every applicable child invocation:
