@@ -23,8 +23,8 @@ Use these settings verbatim on every applicable child invocation:
   - Implementation prompt: `/goal`, followed by the parent-provided issue snapshot.
   - Local review prompt: `/review`
   - Fix only high-priority findings without widening scope.
-- **Claude Code CLI**: model `Opus 4.8`, reasoning effort `high`
-  - Pass `--permission-mode auto --model claude-opus-4-8 --effort high -p`.
+- **Claude Code CLI**: model `Opus 5`, reasoning effort `high`
+  - Pass `--permission-mode auto --model claude-opus-5 --effort high -p`.
   - Local review prompt: `/code-review`
   - Security review prompt: `/security-review`
   - PR review prompt: `/review #<pr-number>`
@@ -37,7 +37,7 @@ codex --yolo exec --ephemeral -c model='"gpt-5.6-sol"' \
   -c model_reasoning_effort='"low"' -c service_tier='"fast"' '<PROMPT>'
 ```
 
-Use `claude --permission-mode auto -p --model claude-opus-4-8 --effort high
+Use `claude --permission-mode auto -p --model claude-opus-5 --effort high
 --no-session-persistence '<PROMPT>'` for Claude Code. Give every child the parent-captured issue
 snapshot and explicitly forbid it from fetching the issue again. Give every reviewer the issue
 URL for provenance, current branch or PR target, repository instructions, and a request to label
