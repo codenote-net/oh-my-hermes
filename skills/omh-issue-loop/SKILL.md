@@ -101,7 +101,12 @@ the worker to infer the boundary from the surrounding workflow.
    absorb pre-existing changes.
 7. Discover repository instructions and validation commands from applicable `AGENTS.md`,
    `CLAUDE.md`, `README`, manifests such as `package.json`, build files, and CI configuration.
-   Do not hardcode build, test, lint, or formatting commands.
+   Discover whether publication requires `gh signoff`, partial signoff contexts, or a repository
+   wrapper by reading the same instructions and checking the default branch with `gh signoff
+   check` when the extension is available. Set `signoff_required=true` only when repository
+   instructions, a repository wrapper, or required status-check configuration provides direct
+   evidence. Otherwise set it to `false`. Installing the extension locally is not evidence that
+   the repository requires it. Do not hardcode validation commands or invent signoff contexts.
 8. Fetch the dynamically discovered default branch and create a new branch from its latest remote
    tip. Name it `omh/issue-<number>-<short-topic>`, with a short lowercase hyphenated topic. Stop if
    that local or remote branch already exists; never reset or reuse it implicitly.
@@ -224,6 +229,41 @@ not mistaken for a successful continuation.
     return to the three-review gate. Do not unnecessarily rerun already successful validations at
     the same unchanged SHA.
 
+## Conditional publication and signoff invariant
+
+All repositories use signed commits and normal pushes. Signoff is an optional, repository-driven
+publication gate:
+
+- When `signoff_required=false`, do not require or invoke `gh signoff`, do not require the
+  extension to be installed, and proceed from verified push directly to PR creation or reviews.
+- When `signoff_required=true`, require the discovered command and contexts. If the command is
+  unavailable, stop with the installation or repository-wrapper requirement; never silently
+  downgrade the mode.
+
+For either mode, apply this sequence to the first published commit and every later review or CI
+fix commit:
+
+1. Create the signed commit and verify its Git signature according to
+   [commit-signing-preflight.md](references/commit-signing-preflight.md).
+2. Push the exact current branch normally. Never force push or rewrite history.
+3. Require a clean working tree, an upstream branch, and `HEAD` equal to the pushed upstream SHA.
+4. Branch on the recorded mode:
+   - If `signoff_required=false`, record `signoff: not required` with the evidence used to make
+     that decision, then continue.
+   - If `signoff_required=true`, never use `gh signoff -f`. Run the repository-prescribed wrapper
+     when one exists; otherwise run `gh signoff` with exactly the contexts discovered during
+     preflight. Signoff must target the just-pushed `HEAD`.
+5. In required mode, run `gh signoff status` and verify the expected `signoff` or
+   `signoff/<context>` commit statuses are successful for that exact SHA. Record the SHA, contexts,
+   command, exit status, and verification evidence.
+6. In required mode, if signoff or status verification fails, stop before PR creation, review
+   reruns, ready handoffs, or CI monitoring. Preserve the commit and branch for recovery; do not
+   substitute a prior SHA's signoff or treat other green checks as signoff.
+
+Only in required mode, every new commit invalidates the previous commit's signoff for workflow
+purposes. When that mode is active, even if the PR already exists or is ready, push and sign off
+the new HEAD before running any of the five reviews for that HEAD.
+
 ## Draft PR and PR loop
 
 1. Run the complete repository-required validation gate once at the clean candidate SHA. Require
@@ -232,10 +272,9 @@ not mistaken for a successful continuation.
    signing fails, keep staged changes intact and stop for the user to restore the configured
    signer; never silently disable signing or alter global Git configuration. Read
    [commit-signing-preflight.md](references/commit-signing-preflight.md) for the required check.
-3. Commit only issue-scoped files, then publish with the repository-required procedure, such as a
-   repository-provided signoff command when its instructions require one. Do not replace that
-   procedure with a plain `git push`. Never use force push or rewrite history. Open a draft PR
-   only after required publication or signoff succeeds. Record every commit in `<base>..HEAD`.
+3. Commit only issue-scoped files, then execute the complete conditional publication and signoff
+   invariant above. Open a draft PR after the pushed HEAD is verified and, only in required mode,
+   signoff succeeds. Record every commit in `<base>..HEAD`.
 4. Run all five review checks for the exact current PR head SHA. Include the complete immutable
    issue snapshot and no-refetch instruction in every child prompt. Draft-PR CI success, signoff
    success, or a skipped automated reviewer is not a substitute for a missing review artifact:
@@ -257,10 +296,11 @@ not mistaken for a successful continuation.
 7. Otherwise apply the same shared ten-fix safety valve. Ask Codex, under the complete worker
    restrictions and mandatory side-effect check, to fix only the current high-priority findings
    and rerun affected validation. Then repeat the three local reviews until clean. The
-   orchestrator commits and pushes normally, reruns PR review and fresh-worktree verification at
-   the new head, and repeats. When ten fix invocations have completed without convergence, stop
-   before an eleventh and execute the fix-limit human handoff below. Never amend, rebase, force
-   push, or hide earlier review artifacts.
+   orchestrator creates a signed commit and pushes it. It reapplies and verifies signoff only when
+   `signoff_required=true`, then reruns PR review and fresh-worktree verification. When ten fix
+   invocations have completed without convergence, stop before an eleventh and execute the
+   fix-limit human handoff below. Never amend, rebase, force push, or hide earlier review
+   artifacts.
 
 ## Ready handoff and background CI monitor
 
@@ -273,6 +313,7 @@ in parallel with Human review, and is monitored by the orchestrator in the backg
 1. Update the PR body with:
    - implementation summary;
    - exact validation commands and results;
+   - publication command and verified signoff contexts for the exact reviewed SHA, when required;
    - all five review sources, target SHA, result, and high-priority count;
    - unresolved medium/low findings and why each remains open, or `None`;
    - a prominent CI status note stating that CI is still being monitored and merge must wait for
@@ -321,8 +362,9 @@ in parallel with Human review, and is monitored by the orchestrator in the backg
 6. For actionable red, count the repair against the shared ten-fix limit and invoke Codex as a
    restricted fix worker with the immutable issue snapshot, exact CI evidence, standard report
    contract, and mandatory post-execution side-effect check. After affected validation, the
-   orchestrator creates a new signed commit and pushes normally. Run all five reviews for the new
-   head before refreshing the ready handoff and monitoring CI again.
+   orchestrator creates a new signed commit and pushes normally. Reapply and verify signoff only
+   when `signoff_required=true`. Run all five reviews after the conditional publication gate
+   passes, then refresh the ready handoff and monitor CI again.
 7. If red is not repository-actionable or required evidence is unavailable, preserve the ready
    PR, post a non-duplicated status comment describing the blocker, and stop for Human direction.
    Do not claim final completion or post the CI-green marker.
@@ -395,6 +437,8 @@ Before declaring completion, require this hard checklist:
 - Include review results and counts, validation results, unresolved findings, and the exact
   closing-keyword line in the PR body.
 - Re-read final PR metadata and require its head SHA to match the reviewed SHA.
+- Require verified signoff for the exact final PR head SHA only when `signoff_required=true`;
+  otherwise require the recorded evidence that signoff was not required.
 - Require `gh pr ready` to succeed and verify `isDraft: false`, unless a stop condition requires
   preserving the draft.
 - Require the verified preliminary Human-review comment for the reviewed SHA.
@@ -410,8 +454,9 @@ Before declaring completion, require this hard checklist:
    direct evidence.
 2. Ask the twice-mentioned Human to perform the final review and merge decision.
 3. Return a concise report containing the issue URL, branch, PR URL, commits created by Codex,
-   high-priority finding count for each of the five sources, validation results, complete CI
-   results, every unresolved finding, the mentioned login, and both verified handoff comment URLs.
+   `signoff_required` mode and conditional publication result for the final SHA, high-priority
+   finding count for each of the five sources, validation results, complete CI results, every
+   unresolved finding, the mentioned login, and both verified handoff comment URLs.
 
 ## Stop conditions
 

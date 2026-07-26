@@ -31,12 +31,17 @@ flowchart TD
     H1["Human decides whether to continue manually<br/>or start a new run"]:::human
 
     O5["Full validation and signing preflight"]:::orchestrator
-    O6["Hermes creates signed commit, pushes,<br/>and opens draft PR"]:::orchestrator
+    O6["Hermes creates signed commit<br/>and pushes exact HEAD"]:::orchestrator
+    G0{"Signoff required<br/>by this repository?"}:::decision
+    G1["Sign off and verify<br/>exact pushed HEAD"]:::orchestrator
+    O11["Open draft PR"]:::orchestrator
     R2["Five reviews on exact PR head<br/>3 local + PR review + fresh-worktree behavior"]:::reviewer
     R3{"All five reviews complete<br/>with zero high findings?"}:::decision
     L1{"Shared fix count<br/>below 10?"}:::decision
     W2["Codex restricted PR or CI fix worker"]:::worker
     O9["Safety check and validation<br/>Hermes signs, commits, and pushes"]:::orchestrator
+    G2{"Signoff required<br/>by this repository?"}:::decision
+    G3["Re-sign off and verify<br/>new pushed HEAD"]:::orchestrator
 
     C0["Inspect every PR CI check<br/>for the reviewed head SHA"]:::orchestrator
     C1{"CI state?"}:::decision
@@ -57,9 +62,13 @@ flowchart TD
     R1 -- "Yes" --> L0
     L0 -- "Yes: increment" --> W1 --> O4 --> R0
     L0 -- "No: 10 fixes used" --> F0 --> H1
-    R1 -- "No" --> O5 --> O6 --> R2 --> R3
+    R1 -- "No" --> O5 --> O6 --> G0
+    G0 -- "No" --> O11 --> R2 --> R3
+    G0 -- "Yes" --> G1 --> O11
     R3 -- "No" --> L1
-    L1 -- "Yes: increment" --> W2 --> O9 --> R2
+    L1 -- "Yes: increment" --> W2 --> O9 --> G2
+    G2 -- "No" --> R2
+    G2 -- "Yes" --> G3 --> R2
     L1 -- "No: 10 fixes used" --> F0
     R3 -- "Yes" --> O7 --> O8
     O8 -- "Human review" --> H2
@@ -86,7 +95,10 @@ flowchart TD
 2. Every child receives the same immutable issue snapshot; no child fetches the issue.
 3. Every Codex implementation or fix is followed by the mandatory side-effect check.
 4. A changed head SHA invalidates earlier review and CI evidence.
-5. CI repairs pass through the same fix, validation, review, signed commit, and push path.
-6. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
-7. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
-8. The workflow never merges or closes the issue; the final decision belongs to the Human.
+5. Signoff is skipped unless repository evidence sets `signoff_required=true`; installation alone
+   is not evidence.
+6. In required mode, every pushed commit is signed off again before reviews run for that HEAD.
+7. CI repairs pass through the same conditional publication path.
+8. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
+9. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
+10. The workflow never merges or closes the issue; the final decision belongs to the Human.
