@@ -252,8 +252,8 @@ not mistaken for a successful continuation.
    its report. Treat setup, checkout, or validation failure as an incomplete gate, not zero
    findings.
 6. Aggregate high-priority counts separately for all five sources. If every source completed with
-   zero high-priority findings at the same SHA, proceed to the CI gate below; review success alone
-   is not completion.
+   zero high-priority findings at the same SHA, immediately execute the ready handoff below before
+   waiting for CI. Review success permits Human review to begin, but is not final completion.
 7. Otherwise apply the same shared ten-fix safety valve. Ask Codex, under the complete worker
    restrictions and mandatory side-effect check, to fix only the current high-priority findings
    and rerun affected validation. Then repeat the three local reviews until clean. The
@@ -262,46 +262,86 @@ not mistaken for a successful continuation.
    before an eleventh and execute the fix-limit human handoff below. Never amend, rebase, force
    push, or hide earlier review artifacts.
 
-## Required green CI gate
+## Ready handoff and background CI monitor
 
-After all five review sources are clean for the exact PR head SHA, require every applicable
-GitHub PR CI check for that same SHA to complete successfully. This gate must pass before
-`gh pr ready`, the final human-review at-mention, or a successful completion report.
+After all five review sources are clean for the exact PR head SHA, make the PR ready immediately
+and hand it to the Human without waiting for external CI. CI remains a required final gate, runs
+in parallel with Human review, and is monitored by the orchestrator in the background.
 
-1. Record the current PR head SHA, then inspect all checks with `gh pr checks <pr-url> --json
-   name,state,bucket,link,workflow`. Use `gh pr checks <pr-url> --watch` while any check is pending,
-   and re-read the complete JSON after watch mode exits. Exit code 8 or a `pending` bucket means
-   the gate is still incomplete, never green.
-2. Require every applicable CI check to have bucket `pass`. Do not treat pending, failed,
-   cancelled, timed-out, action-required, stale, or missing expected checks as green. A skipped
-   check is acceptable only when repository configuration makes it explicitly non-applicable;
-   record the evidence instead of silently treating every skip as success. If repository
-   workflows or required checks are configured but no check is reported for the head SHA, treat
-   the gate as incomplete. If the repository genuinely has no CI configured, record that fact
-   explicitly as the gate result.
-3. Re-read the PR head SHA after collecting the terminal check set. If it differs from the
-   reviewed SHA, discard the stale result and restart all five reviews for the new head before
-   checking CI again.
-4. If every applicable check is green, preserve the exact check names, states, links, and verified
-   head SHA in orchestration state, then continue to PR completion. Do not post any at-mention
-   comment before this point.
-5. If a check is red, inspect its available GitHub Actions logs and failure evidence. Distinguish
-   an actionable implementation failure from an external infrastructure, permission, quota, or
-   flaky-service failure. Never modify code merely to hide or bypass a failing check.
-6. For an actionable failure, count the repair against the shared ten-fix limit and invoke Codex
-   as a restricted fix worker with the immutable issue snapshot, exact failing check evidence,
-   and the same report contract and mandatory post-execution side-effect check. The worker must
-   not monitor CI or perform reviews.
-7. After a successful worker fix, run affected local validation and the repository-required final
-   checks. The orchestrator then creates a new signed commit and pushes normally. Run all five
-   review sources for the new exact head SHA before returning to this CI gate. Never skip reviews
-   because the change only fixes CI.
-8. If the red check is not actionable from the repository, required logs are unavailable, or the
-   check cannot be rerun safely, stop with the check name, URL, evidence, and blocker. Do not mark
-   the PR ready and do not post an at-mention comment.
-9. If the shared ten-fix limit is exhausted by CI repairs, stop before an eleventh attempt and
-   execute the fix-limit progress handoff below. Because CI is not green, that progress comment
-   must not contain an at-mention.
+### Make the reviewed PR ready
+
+1. Update the PR body with:
+   - implementation summary;
+   - exact validation commands and results;
+   - all five review sources, target SHA, result, and high-priority count;
+   - unresolved medium/low findings and why each remains open, or `None`;
+   - a prominent CI status note stating that CI is still being monitored and merge must wait for
+     the final green-CI handoff;
+   - `Closes #<issue-number>` as its own top-level line.
+2. Keep the closing keyword outside code blocks, quotes, lists, headings, and sentences. Read the
+   body back with `gh pr view` and require the exact closing line and CI-waiting note.
+3. Reconfirm that the PR head SHA matches the SHA that passed all five reviews. If the PR is still
+   draft, run `gh pr ready`; if a prior cycle already made it ready, leave it ready. In both cases
+   verify `isDraft: false`. Never merge the PR or close the issue.
+4. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
+   Post and read back exactly one comment for this reviewed SHA, using the marker
+   `<!-- omh-issue-loop-human-review-ci-pending:<reviewed-head-sha> -->` to avoid duplicates:
+
+   ```text
+   @<login> All five automated reviews passed for <reviewed-head-sha>, and this PR is ready for
+   Human review. CI may still be pending and is being monitored in the background. Please begin
+   review, but wait for the final CI-green handoff before deciding to merge.
+
+   <!-- omh-issue-loop-human-review-ci-pending:<reviewed-head-sha> -->
+   ```
+
+5. Record the ready state and verified preliminary handoff comment URL. This comment begins Human
+   review; it does not claim CI success or authorize merge.
+
+### Monitor CI in the background
+
+1. Start monitoring only after the ready state and preliminary handoff are verified. Record the
+   current PR head SHA, then inspect all checks with `gh pr checks <pr-url> --json
+   name,state,bucket,link,workflow`. Run watch or polling in the background so Human review is not
+   blocked, and preserve every terminal status transition.
+2. Treat exit code 8 or a `pending` bucket as still running. Continue bounded polling until checks
+   change state; do not post repeated pending comments or duplicate mentions.
+3. Require every applicable check to have bucket `pass` for green. Do not treat failed,
+   cancelled, timed-out, action-required, stale, or missing expected checks as green. Accept a
+   skipped check only with evidence that repository configuration makes it non-applicable. If
+   workflows or required checks are configured but no check is reported, keep the state pending.
+   If the repository genuinely has no CI configured, record that explicitly as the terminal green
+   equivalent.
+4. Re-read the PR head SHA on every terminal observation. If it differs from the reviewed SHA,
+   discard stale CI and review results, run all five reviews for the new head, refresh the PR body
+   and ready handoff for that SHA, then start a new background CI monitor.
+5. On red, inspect available GitHub Actions logs and distinguish an actionable implementation
+   failure from an external infrastructure, permission, quota, or service failure. Never change
+   code to hide or bypass a failing check.
+6. For actionable red, count the repair against the shared ten-fix limit and invoke Codex as a
+   restricted fix worker with the immutable issue snapshot, exact CI evidence, standard report
+   contract, and mandatory post-execution side-effect check. After affected validation, the
+   orchestrator creates a new signed commit and pushes normally. Run all five reviews for the new
+   head before refreshing the ready handoff and monitoring CI again.
+7. If red is not repository-actionable or required evidence is unavailable, preserve the ready
+   PR, post a non-duplicated status comment describing the blocker, and stop for Human direction.
+   Do not claim final completion or post the CI-green marker.
+8. If the shared ten-fix limit is exhausted by CI repairs, stop before an eleventh attempt and
+   execute the fix-limit human handoff below.
+9. On green, require the PR head SHA to equal both the reviewed SHA and green-CI SHA. Update and
+   read back the PR body's CI note with the exact terminal check results. Then post and verify one
+   final at-mention comment, deduplicated by
+   `<!-- omh-issue-loop-human-review-ci-green:<reviewed-head-sha> -->`:
+
+   ```text
+   @<login> CI is now green for <reviewed-head-sha>. All five automated reviews and all
+   applicable CI checks passed. Please perform the final review and decide whether to merge.
+
+   <!-- omh-issue-loop-human-review-ci-green:<reviewed-head-sha> -->
+   ```
+
+10. Record the complete check set and final comment URL. Only this green-CI handoff permits the
+    workflow to report final completion and ask the Human for the merge decision.
 
 ## Fix-limit human handoff
 
@@ -309,10 +349,7 @@ When the shared ten-fix limit is exhausted, the orchestrator must leave a durabl
 comment before returning control to the user. This is a stop-path handoff, not a successful
 completion signal. Do not create a PR solely to hold this comment.
 
-1. Determine whether the required green CI gate has passed for the exact current head SHA. Only
-   when it has passed may this stop-path comment mention the recorded human-review target.
-   Otherwise post the same progress comment without any `@<login>` text. This preserves the rule
-   that no at-mention is posted before CI is green.
+1. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
 2. Determine the comment target from orchestration state:
    - If a PR has already been created for this run, comment on that PR with `gh pr comment`,
      whether it is still draft or ready.
@@ -330,12 +367,10 @@ completion signal. Do not create a PR solely to hold this comment.
 4. Append the idempotency marker
    `<!-- omh-issue-loop-fix-limit:<current-head-sha> -->`. Inspect comments on the selected target
    first; if that exact marker exists, reuse the existing comment and do not post a duplicate.
-5. Post exactly one comment with this shape, substituting the complete progress summary. Include
-   the first-line `@<login>` prefix only when the green CI gate passed for this exact HEAD;
-   otherwise start with `The omh-issue-loop...` and do not include an at-mention anywhere:
+5. Post exactly one comment with this shape, substituting the complete progress summary:
 
    ```text
-   [@<login> ]The omh-issue-loop fix limit was reached after 10/10 fix attempts.
+   @<login> The omh-issue-loop fix limit was reached after 10/10 fix attempts.
    Automated work has stopped before an eleventh attempt.
 
    <progress summary>
@@ -345,13 +380,12 @@ completion signal. Do not create a PR solely to hold this comment.
    <!-- omh-issue-loop-fix-limit:<current-head-sha> -->
    ```
 
-6. Read the selected target's comments back and require one comment to contain the marker. When CI
-   was green, also require the exact `@<login>` mention; when CI was not green, require that the
-   comment contain no at-mention. Record its URL. If posting or verification fails, remain stopped
+6. Read the selected target's comments back and require one comment to contain the exact
+   `@<login>` mention and marker. Record its URL. If posting or verification fails, remain stopped
    and report both the exhausted fix limit and the handoff failure; never resume the loop, create
    or ready a PR, or claim successful completion.
-7. Include the selected target type, target URL, whether an at-mention was permitted, mentioned
-   login when applicable, and verified comment URL in the stop report.
+7. Include the selected target type, target URL, mentioned login, and verified comment URL in the
+   stop report.
 
 ## Complete the PR
 
@@ -361,57 +395,23 @@ Before declaring completion, require this hard checklist:
 - Include review results and counts, validation results, unresolved findings, and the exact
   closing-keyword line in the PR body.
 - Re-read final PR metadata and require its head SHA to match the reviewed SHA.
-- Require the green CI gate to have passed for the exact reviewed head SHA and include every check
-  result, while never treating CI success as a replacement for a review gate.
 - Require `gh pr ready` to succeed and verify `isDraft: false`, unless a stop condition requires
   preserving the draft.
-- Require one verified PR comment that mentions the recorded `gh` user and requests final human
-  review for the exact reviewed head SHA.
+- Require the verified preliminary Human-review comment for the reviewed SHA.
+- Require background CI monitoring to reach green for that same SHA.
+- Require the verified final CI-green at-mention comment for that SHA.
 - Generate the final report only after every item passes. Re-read PR state when necessary, but
   never re-fetch the issue; final issue reporting must use the immutable preflight snapshot.
 
-1. Update the PR body with:
-   - implementation summary;
-   - exact validation commands and results;
-   - all five review sources, target SHA, result, and high-priority count;
-   - unresolved medium/low findings and why each remains open, or `None`;
-   - `Closes #<issue-number>` as its own top-level line.
-2. Keep the closing keyword outside code blocks, quotes, lists, headings, and sentences. A bare
-   issue URL is insufficient. Read the body back with `gh pr view` and perform a simple exact-line
-   check for `Closes #<issue-number>`.
-3. For dependency-alert issues, distinguish the repository default-branch alert count from the
+1. For dependency-alert issues, distinguish the repository default-branch alert count from the
    proposed branch's manifest and lockfile validation. Do not claim that open Dependabot alerts
    are resolved while the PR is unmerged. Record the baseline count and state that GitHub
    recalculates alert state after merge unless a supported branch-specific API or check provides
    direct evidence.
-4. Reconfirm that the PR head SHA matches both the fully reviewed SHA and the SHA whose complete
-   CI check set passed the green gate. Only then mark the draft ready with `gh pr ready`. Never
-   merge the PR or close the issue.
-5. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
-   Inspect existing PR comments for the marker
-   `<!-- omh-issue-loop-human-review:<reviewed-head-sha> -->`. If that exact marker already exists,
-   reuse the comment and do not post a duplicate. Otherwise, only after green CI and
-   `isDraft: false` are both verified, post exactly one PR comment with this content, substituting
-   the login and full reviewed SHA:
-
-   ```text
-   @<login> Human review requested. All automated implementation, validation, and review gates
-   passed for <reviewed-head-sha>. Please perform the final review and decide whether to merge.
-
-   <!-- omh-issue-loop-human-review:<reviewed-head-sha> -->
-   ```
-
-   Use `gh pr comment` so the at-mention and handoff are visible on the PR. Notification behavior
-   depends on GitHub settings, especially for self-mentions; the durable PR comment is the required
-   handoff record. Do not use a formal reviewer assignment because GitHub may reject assigning the
-   authenticated user to review their own PR.
-6. Read the PR comments back and require one comment to contain both the exact `@<login>` mention
-   and exact head-SHA marker. If posting or verification fails, do not claim orchestration
-   completion; report the ready PR and the handoff failure for the user to resolve.
-7. Ask the mentioned human to perform the final review and merge decision.
-8. Return a concise report containing the issue URL, branch, PR URL, commits created by Codex,
-   high-priority finding count for each of the five sources, validation results, every unresolved
-   finding, the mentioned login, and the verified review-request comment URL.
+2. Ask the twice-mentioned Human to perform the final review and merge decision.
+3. Return a concise report containing the issue URL, branch, PR URL, commits created by Codex,
+   high-priority finding count for each of the five sources, validation results, complete CI
+   results, every unresolved finding, the mentioned login, and both verified handoff comment URLs.
 
 ## Stop conditions
 

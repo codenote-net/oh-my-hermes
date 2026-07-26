@@ -27,7 +27,7 @@ flowchart TD
     L0{"Shared fix count<br/>below 10?"}:::decision
     W1["Codex restricted local fix worker"]:::worker
     O4["Safety check and affected local validation"]:::orchestrator
-    F0["Fix-limit progress comment<br/>PR if created; otherwise issue<br/>No at-mention before green CI"]:::stop
+    F0["Fix-limit at-mention progress comment<br/>PR if created; otherwise issue"]:::stop
     H1["Human decides whether to continue manually<br/>or start a new run"]:::human
 
     O5["Full validation and signing preflight"]:::orchestrator
@@ -40,14 +40,16 @@ flowchart TD
 
     C0["Inspect every PR CI check<br/>for the reviewed head SHA"]:::orchestrator
     C1{"CI state?"}:::decision
-    C2["Wait for pending checks<br/>then read complete check set again"]:::orchestrator
+    C2["Continue background monitoring<br/>then read complete check set again"]:::orchestrator
     C3{"Red failure actionable<br/>from repository?"}:::decision
-    S1["Stop: report CI or infrastructure blocker<br/>Do not ready PR or at-mention"]:::stop
+    S1["Stop: preserve ready PR<br/>Report CI or infrastructure blocker"]:::stop
     C4{"PR head still equals<br/>reviewed and green-CI SHA?"}:::decision
 
-    O7["Update and verify PR body<br/>Mark PR ready"]:::orchestrator
-    O8["Post and verify one Human review request<br/>with authenticated-user at-mention"]:::orchestrator
-    H2["Human performs final review<br/>and decides whether to merge"]:::human
+    O7["Immediately update and verify PR body<br/>Mark PR ready"]:::orchestrator
+    O8["At-mention Human<br/>Five reviews passed; CI monitoring continues"]:::orchestrator
+    H2["Human begins review<br/>Waits for final green-CI handoff before merge"]:::human
+    O10["Update CI result and at-mention Human again<br/>All applicable CI is green"]:::orchestrator
+    H3["Human performs final review<br/>and decides whether to merge"]:::human
 
     H0 --> O0 --> O1 --> O2 --> W0 --> O3
     O3 -- "No" --> S0
@@ -59,14 +61,16 @@ flowchart TD
     R3 -- "No" --> L1
     L1 -- "Yes: increment" --> W2 --> O9 --> R2
     L1 -- "No: 10 fixes used" --> F0
-    R3 -- "Yes" --> C0 --> C1
+    R3 -- "Yes" --> O7 --> O8
+    O8 -- "Human review" --> H2
+    O8 -- "Background CI monitor" --> C0 --> C1
     C1 -- "Pending" --> C2 --> C0
     C1 -- "Red" --> C3
     C3 -- "No" --> S1
     C3 -- "Yes" --> L1
     C1 -- "Green" --> C4
     C4 -- "No: head changed" --> R2
-    C4 -- "Yes" --> O7 --> O8 --> H2
+    C4 -- "Yes" --> O10 --> H3
 
     classDef human fill:#fff2cc,stroke:#8a6d1d,color:#332800,stroke-width:2px;
     classDef orchestrator fill:#d9eaff,stroke:#245a9a,color:#102a43,stroke-width:2px;
@@ -83,5 +87,6 @@ flowchart TD
 3. Every Codex implementation or fix is followed by the mandatory side-effect check.
 4. A changed head SHA invalidates earlier review and CI evidence.
 5. CI repairs pass through the same fix, validation, review, signed commit, and push path.
-6. The successful Human at-mention occurs only after all reviews and CI are green for one SHA.
-7. The workflow never merges or closes the issue; the final decision belongs to the Human.
+6. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
+7. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
+8. The workflow never merges or closes the issue; the final decision belongs to the Human.
