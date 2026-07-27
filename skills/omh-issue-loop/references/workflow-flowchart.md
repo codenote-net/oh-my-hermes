@@ -20,13 +20,16 @@ flowchart TD
     O2["Create issue branch from latest default branch"]:::orchestrator
     W0["Codex implementation worker<br/>Snapshot in prompt; local changes and validation only"]:::worker
     O3{"Post-worker side-effect<br/>safety check passed?"}:::decision
+    Q0{"Required report information<br/>is complete?"}:::decision
+    O12["One read-only report repair<br/>No fixed heading count"]:::orchestrator
+    Q1{"Repair complete with<br/>no side effects?"}:::decision
     S0["Stop: orchestration failure<br/>Preserve and report evidence"]:::stop
 
     R0["Three local reviews on exact diff<br/>Codex review + Claude code + security"]:::reviewer
     R1{"Any high-priority finding?"}:::decision
     L0{"Shared fix count<br/>below 10?"}:::decision
     W1["Codex restricted local fix worker"]:::worker
-    O4["Safety check and affected local validation"]:::orchestrator
+    O4["Safety and semantic report check<br/>Repair report once if needed; run validation"]:::orchestrator
     F0["Fix-limit at-mention progress comment<br/>PR if created; otherwise issue"]:::stop
     H1["Human decides whether to continue manually<br/>or start a new run"]:::human
 
@@ -58,7 +61,11 @@ flowchart TD
 
     H0 --> O0 --> O1 --> O2 --> W0 --> O3
     O3 -- "No" --> S0
-    O3 -- "Yes" --> R0 --> R1
+    O3 -- "Yes" --> Q0
+    Q0 -- "Yes" --> R0 --> R1
+    Q0 -- "No" --> O12 --> Q1
+    Q1 -- "No" --> S0
+    Q1 -- "Yes" --> R0
     R1 -- "Yes" --> L0
     L0 -- "Yes: increment" --> W1 --> O4 --> R0
     L0 -- "No: 10 fixes used" --> F0 --> H1
@@ -94,11 +101,13 @@ flowchart TD
 1. Only Hermes mutates Git history, remotes, PRs, issues, or PR readiness.
 2. Every child receives the same immutable issue snapshot; no child fetches the issue.
 3. Every Codex implementation or fix is followed by the mandatory side-effect check.
-4. A changed head SHA invalidates earlier review and CI evidence.
-5. Signoff is skipped unless repository evidence sets `signoff_required=true`; installation alone
+4. Worker reports are judged by required information, never heading count; missing information
+   gets one read-only repair attempt before stopping.
+5. A changed head SHA invalidates earlier review and CI evidence.
+6. Signoff is skipped unless repository evidence sets `signoff_required=true`; installation alone
    is not evidence.
-6. In required mode, every pushed commit is signed off again before reviews run for that HEAD.
-7. CI repairs pass through the same conditional publication path.
-8. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
-9. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
-10. The workflow never merges or closes the issue; the final decision belongs to the Human.
+7. In required mode, every pushed commit is signed off again before reviews run for that HEAD.
+8. CI repairs pass through the same conditional publication path.
+9. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
+10. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
+11. The workflow never merges or closes the issue; the final decision belongs to the Human.

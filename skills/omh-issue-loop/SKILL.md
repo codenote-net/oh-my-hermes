@@ -168,18 +168,23 @@ not mistaken for a successful continuation.
    only in the current branch. Leave the implementation changes uncommitted in the working tree
    so that the orchestrator can review them before committing and pushing.
 
-   At the end, report only:
-   1. The files changed.
-   2. The exact validation commands executed.
-   3. The exit status and result of each validation command.
-   4. Any blockers or unresolved concerns.
+   At the end, include all of this information in any clear format:
+   - files changed, or explicitly `None`;
+   - exact validation commands executed, or explicitly `None`;
+   - exit status and result for each executed validation command;
+   - blockers or unresolved concerns, or explicitly `None`.
+
+   Do not optimize for a fixed number of headings or sections. One combined section, three
+   sections, four sections, or another clear structure is acceptable; information completeness is
+   the contract.
 
    The orchestrator will handle all reviews, commits, pushes, pull-request operations, and final
    reporting.
    ```
 
-3. After the process exits, perform a mandatory fail-closed side-effect check before any review:
-   - require exit status zero and all four requested report sections;
+3. After the process exits, perform a mandatory fail-closed side-effect and report-content check
+   before any review:
+   - require exit status zero;
    - require HEAD and the baseline commit range to be unchanged;
    - compare the branch reflog with the baseline and reject evidence of commit, amend, or reset;
    - compare the remote branch OID with the baseline and reject creation or movement of the
@@ -190,32 +195,51 @@ not mistaken for a successful continuation.
      including any attempt to fetch or mutate the issue, even when its observable remote state was
      not re-read;
    - inspect status and diffs, including staged and untracked files, and require every change to
-     be necessary for the issue or an explicitly required repository-generated artifact.
-4. If any check fails or cannot be completed, stop immediately and report an orchestration
-   failure with the before/after evidence. Do not undo or conceal the worker action. Do not start
-   local reviews, create or update a PR, invoke another worker, or perform further PR operations.
-5. If every check passes, preserve the worker report and continue. The orchestrator must not
-   repair the implementation itself.
-6. Capture these three independent review artifacts. Include the complete immutable issue
+     be necessary for the issue or an explicitly required repository-generated artifact;
+   - assess the output semantically for the four required information categories above. Never
+     count headings or require numbered sections.
+4. If the worker exited nonzero, performed a prohibited side effect, or changed files outside
+   scope, stop immediately and report an orchestration failure with before/after evidence. Do not
+   undo or conceal the worker action. Do not start local reviews, create or update a PR, invoke
+   another implementation worker, or perform further PR operations.
+5. If side-effect checks pass but required report information is missing or ambiguous, do not
+   stop immediately:
+   - derive the changed-file list from `git status` and diffs when possible, but never invent
+     validation commands, exit statuses, results, blockers, or concerns;
+   - make exactly one report-repair invocation for that worker. Give it the original worker
+     output, the missing information categories, and the immutable issue snapshot;
+   - instruct the repair process to produce only the missing report information from existing
+     evidence. It must not edit files, run validation, mutate Git or GitHub, monitor CI, or perform
+     reviews;
+   - capture a fresh side-effect baseline before repair and apply the same fail-closed
+     post-execution side-effect check afterward;
+   - do not count report repair as a fix iteration.
+6. Merge the original output and repair output, then reassess semantic completeness without
+   requiring any section count. If required information is still missing, the repair process
+   fails, or it performs a prohibited side effect, stop and list the exact missing categories or
+   before/after evidence.
+7. If every safety and information check passes, preserve the combined worker report and continue.
+   The orchestrator must not repair the implementation itself.
+8. Capture these three independent review artifacts. Include the complete immutable issue
    snapshot and the no-refetch instruction in every review prompt:
    - Codex `/review` against the branch diff from the recorded base.
    - Claude Code `/code-review` against the same diff.
    - Claude Code `/security-review` against the same diff.
-7. Run long jobs in the background when supported and poll them to terminal completion. Preserve
+9. Run long jobs in the background when supported and poll them to terminal completion. Preserve
    stdout, stderr, exit status, and target SHA for each artifact. A review that prints a
    complete-looking report but times out, hangs, or has no recorded exit status is incomplete.
    Retry with a narrower read-only prompt when appropriate, but never count a partial artifact as
    clean. Run independent read-only reviews in parallel only when they cannot mutate the same
    worktree. A failed or incomplete review is not a clean result.
-8. Normalize priorities. Treat `critical`, `high`, `P0`, and `P1` (and explicit equivalents such
+10. Normalize priorities. Treat `critical`, `high`, `P0`, and `P1` (and explicit equivalents such
    as blocker or severe exploitable vulnerability) as high priority. Do not promote ambiguous
    findings merely to force convergence; retain the reviewer's evidence and stated severity.
-9. If zero high-priority findings remain and every review completed, leave the local loop.
-10. Otherwise, if ten fix invocations have already completed, stop before an eleventh, summarize
+11. If zero high-priority findings remain and every review completed, leave the local loop.
+12. Otherwise, if ten fix invocations have already completed, stop before an eleventh, summarize
    repeated and unresolved findings, preserve the branch, execute the fix-limit human handoff
    below, and ask the user to decide. Never open or ready a PR while this safety valve is active.
    If fewer than ten fixes have run, increment the shared fix count and continue.
-11. Invoke Codex with the complete high-priority findings, complete immutable issue snapshot,
+13. Invoke Codex with the complete high-priority findings, complete immutable issue snapshot,
     no-refetch instruction, and the same strict restrictions and report contract used by the
     implementation prompt, followed by this task instruction:
 
@@ -225,9 +249,9 @@ not mistaken for a successful continuation.
    validation, plus any repository-required final checks. Report files and exact results.
    ```
 
-12. Apply the mandatory post-execution side-effect check to the fix worker. Only after it passes,
-    return to the three-review gate. Do not unnecessarily rerun already successful validations at
-    the same unchanged SHA.
+14. Apply the mandatory post-execution side-effect check, semantic report validation, and one-time
+    report-repair procedure to the fix worker. Only after all pass, return to the three-review
+    gate. Do not unnecessarily rerun already successful validations at the same unchanged SHA.
 
 ## Conditional publication and signoff invariant
 
