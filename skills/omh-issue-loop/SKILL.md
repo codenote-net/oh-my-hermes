@@ -20,6 +20,8 @@ Before launching any background Codex worker, apply
 working-tree claims before confirmed process termination and quiescence.
 For new-run, resume, durable-state, and legacy salvage rules, read
 [resume-and-salvage.md](references/resume-and-salvage.md) before preflight.
+Use the canonical schemas and official initializer, baseline capture, and pre-launch validator in
+[durable-worker-protocol.md](references/durable-worker-protocol.md). Never hand-author state.
 
 ## Fixed execution configuration
 
@@ -118,7 +120,7 @@ the worker to infer the boundary from the surrounding workflow.
    stop if it exists. For resume, require the exact saved branch and skip this rejection.
 9. Atomically persist the complete durable state schema before delegation, including phase,
    process identity, fingerprints, validation/review state, PR identity, and a shared maximum of
-   ten fix iterations.
+   ten fix iterations. Use `scripts/init-run-state.py`; do not construct `state.json` ad hoc.
 
 ## Local implementation loop
 
@@ -132,7 +134,10 @@ the worker to infer the boundary from the surrounding workflow.
      metadata to detect edits, readiness, state, body, title, and head changes;
    - the immutable issue snapshot captured during preflight; do not fetch the issue again for the
      baseline.
-2. Atomically save the baseline, then invoke Codex through `scripts/run-worker.py` using exactly
+2. Save GitHub evidence separately, then use `scripts/capture-worker-baseline.py` and require
+   `scripts/validate-run-state.py pre-launch` to succeed. The runner repeats that shared validation
+   before `Popen`; rejection guarantees `workerSpawned=false`. Atomically save the baseline, then
+   invoke Codex through `scripts/run-worker.py` using exactly
    one Hermes `terminal(background=true, notify_on_complete=true)` layer. Never background the
    worker again inside the wrapper. Use this complete prompt:
 
