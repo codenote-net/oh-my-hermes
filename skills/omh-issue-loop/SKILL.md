@@ -14,6 +14,11 @@ Before starting, read [workflow-flowchart.md](references/workflow-flowchart.md) 
 end-to-end phases, ownership boundaries, loops, stop paths, CI gate, and Human handoff. Use it as
 the workflow map; this file remains the authoritative source for detailed requirements.
 
+Before launching any background Codex worker, apply
+[worker-completion-reconciliation.md](references/worker-completion-reconciliation.md).
+`exited` with `exit_code=null` is indeterminate; do not begin post-worker checks or make definitive
+working-tree claims before confirmed process termination and quiescence.
+
 ## Fixed execution configuration
 
 Use these settings verbatim on every applicable child invocation:
@@ -182,8 +187,9 @@ not mistaken for a successful continuation.
    reporting.
    ```
 
-3. After the process exits, perform a mandatory fail-closed side-effect and report-content check
-   before any review:
+3. Reconcile worker completion using the mandatory atomic-artifact, process-liveness, output
+   stability, and working-tree quiescence protocol. Only after it confirms terminal completion,
+   perform the fail-closed side-effect and report-content check before any review:
    - require exit status zero;
    - require HEAD and the baseline commit range to be unchanged;
    - compare the branch reflog with the baseline and reject evidence of commit, amend, or reset;
@@ -198,10 +204,11 @@ not mistaken for a successful continuation.
      be necessary for the issue or an explicitly required repository-generated artifact;
    - assess the output semantically for the four required information categories above. Never
      count headings or require numbered sections.
-4. If the worker exited nonzero, performed a prohibited side effect, or changed files outside
-   scope, stop immediately and report an orchestration failure with before/after evidence. Do not
-   undo or conceal the worker action. Do not start local reviews, create or update a PR, invoke
-   another implementation worker, or perform further PR operations.
+4. If terminal completion cannot be confirmed, the worker exited nonzero, performed a prohibited side effect, or changed files outside scope, fail closed with available evidence. When
+   completion is indeterminate, explicitly state that the working tree may still
+   change; never report `no changes` or another definitive final state. Do not undo or conceal the
+   worker action. Do not start reviews, create or update a PR, invoke another implementation
+   worker, or perform further PR operations.
 5. If side-effect checks pass but required report information is missing or ambiguous, do not
    stop immediately:
    - derive the changed-file list from `git status` and diffs when possible, but never invent
@@ -249,9 +256,9 @@ not mistaken for a successful continuation.
    validation, plus any repository-required final checks. Report files and exact results.
    ```
 
-14. Apply the mandatory post-execution side-effect check, semantic report validation, and one-time
-    report-repair procedure to the fix worker. Only after all pass, return to the three-review
-    gate. Do not unnecessarily rerun already successful validations at the same unchanged SHA.
+14. Reconcile fix-worker completion, then apply the mandatory post-execution side-effect check,
+    semantic report validation, and one-time report-repair procedure. Only after all pass, return
+    to the three-review gate. Do not unnecessarily rerun successful validations at the same SHA.
 
 ## Conditional publication and signoff invariant
 
@@ -318,8 +325,9 @@ the new HEAD before running any of the five reviews for that HEAD.
    zero high-priority findings at the same SHA, immediately execute the ready handoff below before
    waiting for CI. Review success permits Human review to begin, but is not final completion.
 7. Otherwise apply the same shared ten-fix safety valve. Ask Codex, under the complete worker
-   restrictions and mandatory side-effect check, to fix only the current high-priority findings
-   and rerun affected validation. Then repeat the three local reviews until clean. The
+   restrictions, completion reconciliation, and mandatory side-effect check, to fix only the
+   current high-priority findings and rerun affected validation. Then repeat the three local
+   reviews until clean. The
    orchestrator creates a signed commit and pushes it. It reapplies and verifies signoff only when
    `signoff_required=true`, then reruns PR review and fresh-worktree verification. When ten fix
    invocations have completed without convergence, stop before an eleventh and execute the
@@ -385,10 +393,10 @@ in parallel with Human review, and is monitored by the orchestrator in the backg
    code to hide or bypass a failing check.
 6. For actionable red, count the repair against the shared ten-fix limit and invoke Codex as a
    restricted fix worker with the immutable issue snapshot, exact CI evidence, standard report
-   contract, and mandatory post-execution side-effect check. After affected validation, the
-   orchestrator creates a new signed commit and pushes normally. Reapply and verify signoff only
-   when `signoff_required=true`. Run all five reviews after the conditional publication gate
-   passes, then refresh the ready handoff and monitor CI again.
+   contract, completion reconciliation, and mandatory post-execution side-effect check. After
+   affected validation, the orchestrator creates a new signed commit and pushes normally. Reapply
+   and verify signoff only when `signoff_required=true`. Run all five reviews after the conditional
+   publication gate passes, then refresh the ready handoff and monitor CI again.
 7. If red is not repository-actionable or required evidence is unavailable, preserve the ready
    PR, post a non-duplicated status comment describing the blocker, and stop for Human direction.
    Do not claim final completion or post the CI-green marker.
