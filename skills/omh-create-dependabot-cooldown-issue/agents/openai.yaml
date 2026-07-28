@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dependabot Cooldown Issue"
+  short_description: "Create Issues for Dependabot fixes past cooldown"
+  default_prompt: "Use $omh-create-dependabot-cooldown-issue to dry-run a GitHub repository URL and create one Issue only after confirmation."
