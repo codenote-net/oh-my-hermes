@@ -15,12 +15,18 @@ Use this map to understand the complete workflow before executing the detailed i
 ```mermaid
 flowchart TD
     H0["Human supplies one GitHub issue URL"]:::human
-    O0["Hermes preflight<br/>Validate tools, auth, repository, and clean tree"]:::orchestrator
+    M0{"New run or explicit resume?"}:::decision
+    O0["New-run preflight<br/>Require clean tree and unused branch"]:::orchestrator
     O1["Fetch issue exactly once<br/>Save immutable issue snapshot"]:::orchestrator
     O2["Create issue branch from latest default branch"]:::orchestrator
+    D0["Atomically persist durable run state<br/>under HERMES_HOME"]:::orchestrator
+    U0["Restore durable state and snapshot<br/>Do not fetch issue"]:::orchestrator
+    U1{"State, repo, branch, HEAD,<br/>snapshot and tree match?"}:::decision
+    U2{"Last durable phase?"}:::decision
     W0["Codex implementation worker<br/>Snapshot in prompt; local changes and validation only"]:::worker
-    O13["Reconcile worker completion<br/>Atomic exit + process and tree quiescence"]:::orchestrator
-    Q2{"Terminal completion<br/>confirmed?"}:::decision
+    O13["Reconcile worker completion<br/>Identity + output and tree quiescence"]:::orchestrator
+    Q2{"Completion status?"}:::decision
+    Q3{"Explicit resume request<br/>or Human approved salvage?"}:::decision
     O3{"Post-worker side-effect<br/>safety check passed?"}:::decision
     Q0{"Required report information<br/>is complete?"}:::decision
     O12["One read-only report repair<br/>No fixed heading count"]:::orchestrator
@@ -61,9 +67,20 @@ flowchart TD
     O10["Update CI result and at-mention Human again<br/>All applicable CI is green"]:::orchestrator
     H3["Human performs final review<br/>and decides whether to merge"]:::human
 
-    H0 --> O0 --> O1 --> O2 --> W0 --> O13 --> Q2
-    Q2 -- "No or indeterminate" --> S0
-    Q2 -- "Yes" --> O3
+    H0 --> M0
+    M0 -- "New" --> O0 --> O1 --> O2 --> D0 --> W0
+    M0 -- "Resume" --> U0 --> U1
+    U1 -- "No" --> S0
+    U1 -- "Yes" --> U2
+    U2 -- "Worker incomplete" --> O13
+    U2 -- "Before worker" --> W0
+    U2 -- "Worker complete" --> R0
+    W0 --> O13 --> Q2
+    Q2 -- "indeterminate" --> S0
+    Q2 -- "confirmed" --> O3
+    Q2 -- "salvageable" --> Q3
+    Q3 -- "No" --> S0
+    Q3 -- "Yes" --> O3
     O3 -- "No" --> S0
     O3 -- "Yes" --> Q0
     Q0 -- "Yes" --> R0 --> R1
@@ -103,17 +120,19 @@ flowchart TD
 ## Invariants visible in the map
 
 1. Only Hermes mutates Git history, remotes, PRs, issues, or PR readiness.
-2. Every child receives the same immutable issue snapshot; no child fetches the issue.
-3. Every background Codex worker must have a valid atomic exit artifact, stopped processes, stable
-   output, and a quiescent working tree before post-worker checks or definitive reporting.
-4. Every Codex implementation or fix is followed by the mandatory side-effect check.
-5. Worker reports are judged by required information, never heading count; missing information
+2. New runs fetch once; resume runs restore the matching durable snapshot and never refetch.
+3. Durable state is atomically updated under `$HERMES_HOME`; conversation context is not state.
+4. Completion is explicitly `confirmed`, `salvageable`, or `indeterminate`; salvage retains an
+   unknown worker exit status and requires independent validation.
+5. Every background worker must be stopped with stable output and tree before checks or reporting.
+6. Every Codex implementation or fix is followed by the mandatory side-effect check.
+7. Worker reports are judged by required information, never heading count; missing information
    gets one read-only repair attempt before stopping.
-6. A changed head SHA invalidates earlier review and CI evidence.
-7. Signoff is skipped unless repository evidence sets `signoff_required=true`; installation alone
+8. A changed head SHA invalidates earlier review and CI evidence.
+9. Signoff is skipped unless repository evidence sets `signoff_required=true`; installation alone
    is not evidence.
-8. In required mode, every pushed commit is signed off again before reviews run for that HEAD.
-9. CI repairs pass through the same conditional publication path.
-10. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
-11. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
-12. The workflow never merges or closes the issue; the final decision belongs to the Human.
+10. In required mode, every pushed commit is signed off again before reviews run for that HEAD.
+11. CI repairs pass through the same conditional publication path.
+12. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
+13. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
+14. The workflow never merges or closes the issue; the final decision belongs to the Human.

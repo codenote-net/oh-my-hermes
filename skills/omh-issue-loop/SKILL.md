@@ -18,6 +18,8 @@ Before launching any background Codex worker, apply
 [worker-completion-reconciliation.md](references/worker-completion-reconciliation.md).
 `exited` with `exit_code=null` is indeterminate; do not begin post-worker checks or make definitive
 working-tree claims before confirmed process termination and quiescence.
+For new-run, resume, durable-state, and legacy salvage rules, read
+[resume-and-salvage.md](references/resume-and-salvage.md) before preflight.
 
 ## Fixed execution configuration
 
@@ -50,10 +52,9 @@ each finding `critical`, `high`, `medium`, or `low`.
 
 ## Single-fetch issue snapshot
 
-The orchestrator is the only process allowed to fetch the issue. Run exactly one
-`gh issue view` for the specified issue during preflight and preserve its exact JSON output as an
-immutable issue snapshot for the entire run. Do not refresh it, including after implementation,
-during side-effect checks, in review loops, or before final reporting.
+The orchestrator is the only process allowed to fetch the issue. A new run executes exactly one
+`gh issue view` and preserves its exact JSON as the immutable snapshot. A resume run restores the
+saved snapshot and executes none. Never refresh it later in either mode.
 
 Include the complete snapshot verbatim in every Codex and Claude Code child prompt inside a
 clearly delimited `ISSUE SNAPSHOT` block. Tell each child that the snapshot is authoritative and
@@ -90,20 +91,21 @@ the worker to infer the boundary from the surrounding workflow.
    the agent to its human operator. Never hardcode a username.
 4. Resolve the current repository root and `gh repo view --json nameWithOwner,defaultBranchRef`.
    Compare `nameWithOwner` case-insensitively with the URL owner/repository and stop on mismatch.
-5. Fetch the issue exactly once:
+5. Select either new-run or explicit resume mode and follow
+   [resume-and-salvage.md](references/resume-and-salvage.md). In new-run mode, fetch the issue
+   exactly once:
 
    ```bash
    gh issue view <issue-url> \
      --json number,title,body,labels,state,url,author,assignees,milestone,createdAt,updatedAt
    ```
 
-   Require valid JSON containing at least the matching URL and number, a non-empty title, and the
-   body and labels fields. Preserve the exact output as the immutable issue snapshot. Derive the
-   title, body, acceptance criteria, labels, and number only from this snapshot. Do not run
-   `gh issue view` again anywhere in the workflow.
-6. Inspect `git status --short --branch` and require no status entries after its branch header;
-   equivalently, require `git status --porcelain` to be empty. Never stash, discard, overwrite, or
-   absorb pre-existing changes.
+   Require matching URL/number, title, body, and labels, then persist the snapshot and hash in the
+   durable run directory. In resume mode, load and verify that saved snapshot without any GitHub
+   issue fetch.
+6. Apply mode-specific worktree rules. New runs require an empty porcelain status. Resume runs may
+   use the saved branch and dirty tree only when durable state, HEAD, and full tree fingerprint
+   match. Never stash, discard, overwrite, or absorb differences.
 7. Discover repository instructions and validation commands from applicable `AGENTS.md`,
    `CLAUDE.md`, `README`, manifests such as `package.json`, build files, and CI configuration.
    Discover whether publication requires `gh signoff`, partial signoff contexts, or a repository
@@ -112,22 +114,11 @@ the worker to infer the boundary from the surrounding workflow.
    instructions, a repository wrapper, or required status-check configuration provides direct
    evidence. Otherwise set it to `false`. Installing the extension locally is not evidence that
    the repository requires it. Do not hardcode validation commands or invent signoff contexts.
-8. Fetch the dynamically discovered default branch and create a new branch from its latest remote
-   tip. Name it `omh/issue-<number>-<short-topic>`, with a short lowercase hyphenated topic. Stop if
-   that local or remote branch already exists; never reset or reuse it implicitly.
-9. Record the base commit, issue URL, immutable issue snapshot, branch, human-review target,
-   validation plan, review outputs, finding counts, and fix iteration count in the orchestration
-   state. Set a total maximum of ten fix iterations across the local and PR loops.
-
-### Safe reruns after an abandoned attempt
-
-When an earlier attempt left a branch or PR for the same issue, do not silently reuse, reset, or
-overwrite it. Inspect the PR state, head branch, local branch, remote branch, and worktree first.
-Only close the stale PR and delete its local or remote branch when the user explicitly requests
-that cleanup. After cleanup, verify that the old PR is closed, the old branch is absent locally
-and remotely, the worktree is clean, and the new branch starts at the current default-branch
-remote tip. Preserve the old PR number and head SHA in the orchestration record so the rerun is
-not mistaken for a successful continuation.
+8. For a new run, create `omh/issue-<number>-<short-topic>` from the latest remote default tip and
+   stop if it exists. For resume, require the exact saved branch and skip this rejection.
+9. Atomically persist the complete durable state schema before delegation, including phase,
+   process identity, fingerprints, validation/review state, PR identity, and a shared maximum of
+   ten fix iterations.
 
 ## Local implementation loop
 
@@ -141,7 +132,9 @@ not mistaken for a successful continuation.
      metadata to detect edits, readiness, state, body, title, and head changes;
    - the immutable issue snapshot captured during preflight; do not fetch the issue again for the
      baseline.
-2. Invoke Codex with this complete prompt, substituting the actual snapshot and issue URL:
+2. Atomically save the baseline, then invoke Codex through `scripts/run-worker.py` using exactly
+   one Hermes `terminal(background=true, notify_on_complete=true)` layer. Never background the
+   worker again inside the wrapper. Use this complete prompt:
 
    ```text
    /goal
@@ -187,10 +180,12 @@ not mistaken for a successful continuation.
    reporting.
    ```
 
-3. Reconcile worker completion using the mandatory atomic-artifact, process-liveness, output
-   stability, and working-tree quiescence protocol. Only after it confirms terminal completion,
-   perform the fail-closed side-effect and report-content check before any review:
-   - require exit status zero;
+3. Reconcile to `confirmed`, `salvageable`, or `indeterminate`. Continue from `salvageable` only
+   after the independent validation and Human-authorization rules in the resume reference.
+   `salvageable` retains unknown exit status. Only then perform the fail-closed side-effect and
+   report-content check:
+   - for `confirmed`, require exit status zero; for authorized `salvageable`, require the recorded
+     unknown status and successful independent validation instead;
    - require HEAD and the baseline commit range to be unchanged;
    - compare the branch reflog with the baseline and reject evidence of commit, amend, or reset;
    - compare the remote branch OID with the baseline and reject creation or movement of the
