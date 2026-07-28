@@ -15,7 +15,10 @@ from worker_protocol import (
     load_json,
     sha256_file,
     update_state,
+    validate_baseline_schema,
     validate_exit_artifact,
+    validate_lifecycle_schema,
+    validate_state_schema,
     working_tree_fingerprint,
 )
 
@@ -47,14 +50,9 @@ def salvage_errors(run_dir: Path, state: dict[str, Any], evidence_path: Path | N
     baseline_path = run_dir / "worker-baseline.json"
     if baseline_path.is_file():
         baseline = load_json(baseline_path)
-        if not {
-            "head",
-            "commitRange",
-            "reflog",
-            "remoteBranch",
-            "pullRequests",
-        }.issubset(baseline):
-            errors.append("worker baseline schema is incomplete")
+        errors.extend(validate_baseline_schema(baseline))
+        if baseline.get("runId") != state.get("runId"):
+            errors.append("worker baseline run ID mismatch")
     output_path = run_dir / "worker-output.log"
     if output_path.is_file() and output_path.stat().st_size == 0:
         errors.append("worker output is empty")
@@ -89,8 +87,42 @@ def main() -> int:
     run_dir = arguments.run_dir.resolve()
     repository = arguments.repository.resolve()
     state = load_json(run_dir / "state.json")
-    identity = state.get("workerProcessIdentity")
-    descendants = state.get("knownDescendantIdentities", [])
+    state_errors = validate_state_schema(state)
+    lifecycle_path = run_dir / "worker-lifecycle.json"
+    lifecycle = load_json(lifecycle_path) if lifecycle_path.is_file() else None
+    lifecycle_errors = validate_lifecycle_schema(lifecycle) if lifecycle else []
+    if lifecycle and not lifecycle_errors and lifecycle["stage"] == "preflight_failed":
+        result = {
+            "completionStatus": "rejected",
+            "completionMode": "preflight_rejected_worker_not_started",
+            "workerExitStatus": "unknown",
+            "workerStarted": False,
+            "artifactPublished": False,
+            "reasons": lifecycle["errors"],
+        }
+        # The preflight rejection may itself be caused by an invalid state schema.
+        # The lifecycle artifact is authoritative proof that no child was started;
+        # do not try to "repair" or rewrite invalid state here.
+        if not validate_state_schema(state):
+            update_state(
+                run_dir,
+                completionMode=result["completionMode"],
+                workerExitStatus="unknown",
+                reconciliationResult=result,
+            )
+        json.dump(result, sys.stdout, indent=2, sort_keys=True)
+        sys.stdout.write("\n")
+        return 2
+    identity = (
+        lifecycle.get("processIdentity")
+        if lifecycle and lifecycle.get("workerSpawned")
+        else state.get("workerProcessIdentity")
+    )
+    descendants = (
+        lifecycle.get("knownDescendantIdentities", [])
+        if lifecycle and lifecycle.get("workerSpawned")
+        else state.get("knownDescendantIdentities", [])
+    )
     if not isinstance(descendants, list):
         descendants = []
     deadline = time.monotonic() + arguments.timeout
@@ -116,9 +148,21 @@ def main() -> int:
         "completionStatus": "indeterminate",
         "completionMode": None,
         "workerExitStatus": "unknown",
+        "workerStarted": bool(lifecycle and lifecycle.get("workerSpawned")),
+        "artifactPublished": bool(lifecycle and lifecycle.get("artifactPublished")),
         "reasons": [],
     }
-    if any_identity_is_live(identity, descendants):
+    if state_errors:
+        result["reasons"].extend(state_errors)
+    if lifecycle_errors:
+        result["reasons"].extend(lifecycle_errors)
+    if lifecycle is None:
+        result["reasons"].append("durable lifecycle evidence is missing")
+    elif lifecycle.get("stage") == "artifact_publish_failed":
+        result["reasons"].append("worker started but exit artifact publication failed")
+    if result["reasons"]:
+        pass
+    elif any_identity_is_live(identity, descendants):
         result["reasons"].append("worker or known descendant process identity is still live")
     elif stable_count < arguments.observations:
         result["reasons"].append("output or working tree did not reach quiescence")
@@ -135,7 +179,7 @@ def main() -> int:
                     completionMode="confirmed_with_exit_artifact",
                     workerExitStatus=artifact["exitCode"],
                 )
-        else:
+        elif lifecycle and lifecycle.get("workerSpawned"):
             errors = salvage_errors(run_dir, state, arguments.salvage_evidence)
             if errors:
                 result["reasons"].extend(errors)
@@ -145,6 +189,8 @@ def main() -> int:
                     completionMode="salvaged_without_exit_artifact",
                     workerExitStatus="unknown",
                 )
+        else:
+            result["reasons"].append("insufficient evidence that a worker was started")
 
     update_state(
         run_dir,

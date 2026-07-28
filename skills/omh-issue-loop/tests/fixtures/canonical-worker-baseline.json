@@ -1,0 +1,20 @@
+{
+  "baseSha": "1111111111111111111111111111111111111111",
+  "branch": "omh/issue-1-example",
+  "capturedAt": "2026-01-01T00:00:00+00:00",
+  "commitRange": [],
+  "head": "1111111111111111111111111111111111111111",
+  "issueSnapshotHash": "3333333333333333333333333333333333333333333333333333333333333333",
+  "protocolVersion": 2,
+  "pullRequests": [],
+  "reflog": [],
+  "remoteBranchOid": null,
+  "repositoryIdentity": "example/example",
+  "repositoryRoot": "/workspace/example",
+  "runId": "run-example",
+  "schemaVersion": 1,
+  "stagedDiffSha256": "4444444444444444444444444444444444444444444444444444444444444444",
+  "statusShort": "## omh/issue-1-example\n",
+  "unstagedDiffSha256": "5555555555555555555555555555555555555555555555555555555555555555",
+  "untrackedFiles": []
+}

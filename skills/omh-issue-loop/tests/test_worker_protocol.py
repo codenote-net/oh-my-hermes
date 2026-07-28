@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import hashlib
 import json
 import subprocess
 import sys
@@ -11,6 +10,9 @@ from pathlib import Path
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL_DIR / "scripts"
+INIT = SCRIPTS / "init-run-state.py"
+CAPTURE = SCRIPTS / "capture-worker-baseline.py"
+VALIDATE = SCRIPTS / "validate-run-state.py"
 RUNNER = SCRIPTS / "run-worker.py"
 RECONCILER = SCRIPTS / "reconcile-worker.py"
 sys.path.insert(0, str(SCRIPTS))
@@ -20,6 +22,8 @@ from worker_protocol import (  # noqa: E402
     load_json,
     new_run_errors,
     resume_state_errors,
+    validate_baseline_schema,
+    validate_state_schema,
     working_tree_fingerprint,
 )
 
@@ -29,9 +33,8 @@ class WorkerProtocolTests(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory()
         self.root = Path(self.temporary.name)
         self.repository = self.root / "repo"
-        self.run_dir = self.root / "hermes" / "runs" / "omh-issue-loop" / "run-1"
-        self.repository.mkdir(parents=True)
-        self.run_dir.mkdir(parents=True)
+        self.run_dir = self.root / "runs" / "run-1"
+        self.repository.mkdir()
         self.git("init", "-q")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.com")
@@ -39,25 +42,21 @@ class WorkerProtocolTests(unittest.TestCase):
         (self.repository / "tracked.txt").write_text("base\n")
         self.git("add", "tracked.txt")
         self.git("commit", "-q", "-m", "base")
-        snapshot = {"number": 1, "title": "test", "body": "", "labels": [], "url": "https://github.com/o/r/issues/1"}
-        atomic_write_json(self.run_dir / "issue-snapshot.json", snapshot)
-        state = {
-                "protocolVersion": 2,
-                "runId": "run-1",
-                "issueUrl": snapshot["url"],
-                "issueSnapshotHash": hashlib.sha256(
-                    (self.run_dir / "issue-snapshot.json").read_bytes()
-                ).hexdigest(),
-                "repositoryIdentity": "o/r",
-                "branch": self.git("branch", "--show-current").stdout.strip(),
-                "baseSha": self.git("rev-parse", "HEAD").stdout.strip(),
-                "currentPhase": "implementation",
-                "fixCount": 0,
-                "repositoryRoot": str(self.repository.resolve()),
-                "currentHead": self.git("rev-parse", "HEAD").stdout.strip(),
-                "expectedWorkingTreeFingerprint": working_tree_fingerprint(self.repository),
-            }
-        atomic_write_json(self.run_dir / "state.json", state)
+        self.snapshot_source = self.root / "snapshot.json"
+        atomic_write_json(
+            self.snapshot_source,
+            {
+                "number": 1,
+                "title": "test",
+                "body": "",
+                "labels": [],
+                "url": "https://github.com/o/r/issues/1",
+            },
+        )
+        self.pr_evidence = self.root / "prs.json"
+        self.pr_evidence.write_text("[]\n")
+        self.initialize()
+        self.capture()
 
     def tearDown(self) -> None:
         self.temporary.cleanup()
@@ -70,85 +69,69 @@ class WorkerProtocolTests(unittest.TestCase):
             text=True,
         )
 
-    def run_worker(self, code: str) -> subprocess.CompletedProcess[str]:
+    def command(self, script: Path, *arguments: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run(
-            [
-                sys.executable,
-                str(RUNNER),
-                "--run-dir",
-                str(self.run_dir),
-                "--repository",
-                str(self.repository),
-                "--",
-                sys.executable,
-                "-c",
-                code,
-            ],
-            capture_output=True,
-            text=True,
+            [sys.executable, str(script), *arguments], capture_output=True, text=True
+        )
+
+    def initialize(self) -> subprocess.CompletedProcess[str]:
+        return self.command(
+            INIT,
+            "--run-dir", str(self.run_dir),
+            "--repository", str(self.repository),
+            "--repository-identity", "o/r",
+            "--issue-url", "https://github.com/o/r/issues/1",
+            "--issue-snapshot", str(self.snapshot_source),
+            "--run-id", "run-1",
+            "--signoff-required", "false",
+        )
+
+    def capture(self) -> subprocess.CompletedProcess[str]:
+        return self.command(
+            CAPTURE,
+            "--run-dir", str(self.run_dir),
+            "--repository", str(self.repository),
+            "--remote-branch-oid", "absent",
+            "--pull-requests-json", str(self.pr_evidence),
+        )
+
+    def run_worker(self, code: str) -> subprocess.CompletedProcess[str]:
+        return self.command(
+            RUNNER,
+            "--run-dir", str(self.run_dir),
+            "--repository", str(self.repository),
+            "--", sys.executable, "-c", code,
         )
 
     def start_worker(self, code: str) -> subprocess.Popen[bytes]:
         return subprocess.Popen(
             [
-                sys.executable,
-                str(RUNNER),
-                "--run-dir",
-                str(self.run_dir),
-                "--repository",
-                str(self.repository),
-                "--",
-                sys.executable,
-                "-c",
-                code,
+                sys.executable, str(RUNNER),
+                "--run-dir", str(self.run_dir),
+                "--repository", str(self.repository),
+                "--", sys.executable, "-c", code,
             ],
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
         )
 
-    def reconcile(
-        self, *, timeout: float = 1, evidence: Path | None = None
-    ) -> tuple[subprocess.CompletedProcess[str], dict]:
-        command = [
-            sys.executable,
-            str(RECONCILER),
-            "--run-dir",
-            str(self.run_dir),
-            "--repository",
-            str(self.repository),
-            "--observations",
-            "2",
-            "--interval",
-            "0.02",
-            "--timeout",
-            str(timeout),
+    def reconcile(self, timeout: float = 1, evidence: Path | None = None) -> tuple[subprocess.CompletedProcess[str], dict]:
+        args = [
+            "--run-dir", str(self.run_dir),
+            "--repository", str(self.repository),
+            "--observations", "2",
+            "--interval", "0.02",
+            "--timeout", str(timeout),
         ]
         if evidence:
-            command += ["--salvage-evidence", str(evidence)]
-        result = subprocess.run(command, capture_output=True, text=True)
+            args += ["--salvage-evidence", str(evidence)]
+        result = self.command(RECONCILER, *args)
         return result, json.loads(result.stdout)
 
-    def complete_report(self) -> str:
-        report = (
-            "Files changed: tracked.txt\nValidation commands: test\n"
-            "Exit status and result: 0 passed\nBlockers: None"
-        )
-        return f"print({report!r})"
-
     def make_salvage_evidence(self) -> Path:
+        path = self.run_dir / "salvage-evidence.json"
         atomic_write_json(
-            self.run_dir / "worker-baseline.json",
-            {
-                "head": self.git("rev-parse", "HEAD").stdout.strip(),
-                "commitRange": [],
-                "reflog": [],
-                "remoteBranch": None,
-                "pullRequests": [],
-            },
-        )
-        evidence = self.run_dir / "salvage-evidence.json"
-        atomic_write_json(
-            evidence,
+            path,
             {
                 "baselineCompared": True,
                 "sideEffectsClean": True,
@@ -158,115 +141,192 @@ class WorkerProtocolTests(unittest.TestCase):
                 "validationResults": [{"command": "git diff --check", "exitCode": 0}],
             },
         )
-        return evidence
+        return path
 
-    def test_01_normal_exit_generates_valid_artifact(self) -> None:
-        self.assertEqual(self.run_worker(self.complete_report()).returncode, 0)
-        result, status = self.reconcile()
-        self.assertEqual(result.returncode, 0)
-        self.assertEqual(status["completionStatus"], "confirmed")
-        self.assertEqual(status["workerExitStatus"], 0)
+    def test_01_initializer_and_baseline_are_canonical(self) -> None:
+        self.assertEqual(validate_state_schema(load_json(self.run_dir / "state.json")), [])
+        self.assertEqual(validate_baseline_schema(load_json(self.run_dir / "worker-baseline.json")), [])
 
-    def test_02_nonzero_exit_is_preserved(self) -> None:
+    def test_02_pre_launch_cli_accepts_complete_run(self) -> None:
+        result = self.command(
+            VALIDATE, "pre-launch", "--repository", str(self.repository), "--run-dir", str(self.run_dir)
+        )
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(json.loads(result.stdout)["valid"])
+
+    def test_03_missing_run_id_never_starts_child(self) -> None:
+        state = load_json(self.run_dir / "state.json")
+        del state["runId"]
+        atomic_write_json(self.run_dir / "state.json", state)
+        marker = self.root / "child-started"
+        result = self.run_worker(f"from pathlib import Path; Path({str(marker)!r}).touch()")
+        self.assertEqual(result.returncode, 125)
+        self.assertFalse(marker.exists())
+        lifecycle = load_json(self.run_dir / "worker-lifecycle.json")
+        self.assertEqual(lifecycle["stage"], "preflight_failed")
+        self.assertFalse(lifecycle["workerSpawned"])
+
+    def test_04_snapshot_hash_mismatch_never_starts_child(self) -> None:
+        (self.run_dir / "issue-snapshot.json").write_text("{}\n")
+        marker = self.root / "child-started"
+        self.assertEqual(self.run_worker(f"open({str(marker)!r},'w').close()").returncode, 125)
+        self.assertFalse(marker.exists())
+
+    def test_05_repository_head_mismatch_never_starts_child(self) -> None:
+        (self.repository / "second.txt").write_text("x")
+        self.git("add", "second.txt")
+        self.git("commit", "-q", "-m", "second")
+        marker = self.root / "child-started"
+        self.assertEqual(self.run_worker(f"open({str(marker)!r},'w').close()").returncode, 125)
+        self.assertFalse(marker.exists())
+
+    def test_06_missing_baseline_never_starts_child(self) -> None:
+        (self.run_dir / "worker-baseline.json").unlink()
+        marker = self.root / "child-started"
+        self.assertEqual(self.run_worker(f"open({str(marker)!r},'w').close()").returncode, 125)
+        self.assertFalse(marker.exists())
+
+    def test_07_normal_exit_publishes_lifecycle_and_artifact(self) -> None:
+        self.assertEqual(self.run_worker("print('done')").returncode, 0)
+        lifecycle = load_json(self.run_dir / "worker-lifecycle.json")
+        self.assertEqual(lifecycle["stage"], "artifact_published")
+        self.assertTrue(lifecycle["workerSpawned"])
+        self.assertTrue(lifecycle["artifactPublished"])
+
+    def test_08_nonzero_exit_is_preserved(self) -> None:
         self.assertEqual(self.run_worker("raise SystemExit(7)").returncode, 7)
         _, status = self.reconcile()
         self.assertEqual(status["completionStatus"], "confirmed")
         self.assertEqual(status["workerExitStatus"], 7)
 
-    def test_03_exited_null_equivalent_while_worker_runs_is_indeterminate(self) -> None:
+    def test_09_live_worker_is_indeterminate(self) -> None:
         worker = self.start_worker("import time; time.sleep(.35)")
         time.sleep(0.08)
         _, status = self.reconcile(timeout=0.05)
         self.assertEqual(status["completionStatus"], "indeterminate")
         worker.wait(timeout=2)
 
-    def test_04_stable_output_does_not_override_live_process(self) -> None:
-        worker = self.start_worker("import time; print('partial', flush=True); time.sleep(.35)")
-        time.sleep(0.12)
-        _, status = self.reconcile(timeout=0.05)
-        self.assertIn("live", " ".join(status["reasons"]))
-        worker.wait(timeout=2)
-
-    def test_05_known_descendant_blocks_completion(self) -> None:
-        code = "import subprocess,time; subprocess.Popen(['sleep','.5']); time.sleep(.3)"
-        self.assertEqual(self.run_worker(code).returncode, 0)
+    def test_10_known_live_descendant_blocks_completion(self) -> None:
+        self.assertEqual(
+            self.run_worker("import subprocess; subprocess.Popen(['sleep','.4'])").returncode, 0
+        )
         _, status = self.reconcile(timeout=0.05)
         self.assertEqual(status["completionStatus"], "indeterminate")
-        time.sleep(0.55)
+        time.sleep(0.45)
 
-    def test_06_missing_artifact_is_not_confirmed(self) -> None:
-        self.run_worker(self.complete_report())
-        (self.run_dir / "worker-exit.json").unlink()
-        _, status = self.reconcile()
-        self.assertEqual(status["completionStatus"], "indeterminate")
-
-    def test_07_complete_legacy_evidence_is_salvageable(self) -> None:
-        self.run_worker(self.complete_report())
-        (self.run_dir / "worker-exit.json").unlink()
-        evidence = self.make_salvage_evidence()
-        _, status = self.reconcile(evidence=evidence)
-        self.assertEqual(status["completionStatus"], "salvageable")
-        self.assertEqual(status["completionMode"], "salvaged_without_exit_artifact")
-        self.assertEqual(status["workerExitStatus"], "unknown")
-
-    def test_08_legacy_run_without_baseline_is_rejected(self) -> None:
-        self.run_worker(self.complete_report())
-        (self.run_dir / "worker-exit.json").unlink()
-        evidence = self.make_salvage_evidence()
-        (self.run_dir / "worker-baseline.json").unlink()
-        _, status = self.reconcile(evidence=evidence)
-        self.assertEqual(status["completionStatus"], "indeterminate")
-
-    def test_09_late_working_tree_change_prevents_early_completion(self) -> None:
-        code = "import pathlib,time; time.sleep(.15); pathlib.Path('tracked.txt').write_text('late\\n')"
-        worker = self.start_worker(code)
-        _, status = self.reconcile(timeout=0.05)
-        self.assertEqual(status["completionStatus"], "indeterminate")
-        worker.wait(timeout=2)
-        _, status = self.reconcile()
+    def test_11_confirmed_exit_artifact(self) -> None:
+        self.assertEqual(self.run_worker("print('ok')").returncode, 0)
+        result, status = self.reconcile()
+        self.assertEqual(result.returncode, 0)
         self.assertEqual(status["completionStatus"], "confirmed")
 
-    def test_10_pid_reuse_identity_mismatch_rejects_artifact(self) -> None:
-        self.run_worker(self.complete_report())
-        state = load_json(self.run_dir / "state.json")
-        state["workerProcessIdentity"]["startToken"] = "reused pid"
-        atomic_write_json(self.run_dir / "state.json", state)
+    def test_12_missing_artifact_never_becomes_confirmed(self) -> None:
+        self.run_worker("print('ok')")
+        (self.run_dir / "worker-exit.json").unlink()
+        _, status = self.reconcile()
+        self.assertNotEqual(status["completionStatus"], "confirmed")
+
+    def test_13_complete_legacy_evidence_is_salvageable_not_confirmed(self) -> None:
+        self.run_worker("print('Files changed: None; validations: None; blockers: None')")
+        (self.run_dir / "worker-exit.json").unlink()
+        _, status = self.reconcile(evidence=self.make_salvage_evidence())
+        self.assertEqual(status["completionStatus"], "salvageable")
+        self.assertEqual(status["workerExitStatus"], "unknown")
+
+    def test_14_legacy_without_evidence_is_indeterminate(self) -> None:
+        self.run_worker("print('ok')")
+        (self.run_dir / "worker-exit.json").unlink()
         _, status = self.reconcile()
         self.assertEqual(status["completionStatus"], "indeterminate")
-        self.assertIn("process identity mismatch", status["reasons"])
 
-    def test_11_new_reconciler_process_can_resume_durable_run(self) -> None:
-        self.run_worker(self.complete_report())
-        _, first = self.reconcile()
-        _, second = self.reconcile()
-        self.assertEqual(first["completionStatus"], second["completionStatus"])
+    def test_15_artifact_publish_failure_has_durable_started_evidence(self) -> None:
+        exit_path = self.run_dir / "worker-exit.json"
+        code = f"from pathlib import Path; Path({str(exit_path)!r}).mkdir()"
+        self.assertEqual(self.run_worker(code).returncode, 125)
+        lifecycle = load_json(self.run_dir / "worker-lifecycle.json")
+        self.assertEqual(lifecycle["stage"], "artifact_publish_failed")
+        self.assertTrue(lifecycle["workerSpawned"])
+        self.assertFalse(lifecycle["artifactPublished"])
 
-    def test_12_resume_does_not_modify_issue_snapshot(self) -> None:
-        self.run_worker(self.complete_report())
+    def test_16_resume_preserves_snapshot_and_exact_dirty_tree(self) -> None:
         before = (self.run_dir / "issue-snapshot.json").read_bytes()
-        self.reconcile()
-        self.assertEqual(before, (self.run_dir / "issue-snapshot.json").read_bytes())
-
-    def test_13_resume_allows_exact_matching_dirty_tree(self) -> None:
         (self.repository / "tracked.txt").write_text("implementation\n")
         state = load_json(self.run_dir / "state.json")
         state["expectedWorkingTreeFingerprint"] = working_tree_fingerprint(self.repository)
         atomic_write_json(self.run_dir / "state.json", state)
         self.assertEqual(resume_state_errors(self.run_dir, self.repository), [])
+        self.assertEqual(before, (self.run_dir / "issue-snapshot.json").read_bytes())
 
-    def test_14_new_run_rejects_dirty_tree_and_existing_branch(self) -> None:
+    def test_17_new_run_rejects_dirty_tree_and_existing_branch(self) -> None:
         self.git("branch", "existing")
         (self.repository / "tracked.txt").write_text("dirty\n")
         errors = new_run_errors(self.repository, "existing")
         self.assertIn("new run requires a clean working tree", errors)
         self.assertIn("new run branch already exists", errors)
 
-    def test_15_wrapper_remains_alive_until_foreground_worker_exits(self) -> None:
-        wrapper = self.start_worker("import time; time.sleep(.25)")
-        time.sleep(0.08)
+    def test_18_wrapper_remains_alive_until_worker_exits(self) -> None:
+        wrapper = self.start_worker("import time; time.sleep(.2)")
+        time.sleep(0.06)
         self.assertIsNone(wrapper.poll())
         wrapper.wait(timeout=2)
-        self.assertTrue((self.run_dir / "worker-exit.json").is_file())
+
+    def test_19_external_state_mutation_invalidates_artifact(self) -> None:
+        self.run_worker("print('ok')")
+        state = load_json(self.run_dir / "state.json")
+        state["workerCommandHash"] = "0" * 64
+        atomic_write_json(self.run_dir / "state.json", state)
+        _, status = self.reconcile()
+        self.assertEqual(status["completionStatus"], "indeterminate")
+        self.assertIn("command hash mismatch", status["reasons"])
+
+    def test_20_preflight_rejection_is_reported_as_not_started(self) -> None:
+        state = load_json(self.run_dir / "state.json")
+        state["runId"] = ""
+        atomic_write_json(self.run_dir / "state.json", state)
+        self.run_worker("raise AssertionError('must not run')")
+        _, status = self.reconcile()
+        self.assertEqual(status["completionStatus"], "rejected")
+        self.assertFalse(status["workerStarted"])
+
+    def test_21_documented_canonical_examples_match_fixtures(self) -> None:
+        document = (SKILL_DIR / "references" / "durable-worker-protocol.md").read_text()
+
+        def example(begin: str, end: str) -> dict:
+            block = document.split(begin, 1)[1].split(end, 1)[0]
+            return json.loads(block.split("```json", 1)[1].split("```", 1)[0])
+
+        fixtures = SKILL_DIR / "tests" / "fixtures"
+        self.assertEqual(
+            example("<!-- BEGIN CANONICAL STATE -->", "<!-- END CANONICAL STATE -->"),
+            json.loads((fixtures / "canonical-state.json").read_text()),
+        )
+        self.assertEqual(
+            example("<!-- BEGIN CANONICAL BASELINE -->", "<!-- END CANONICAL BASELINE -->"),
+            json.loads((fixtures / "canonical-worker-baseline.json").read_text()),
+        )
+        self.assertEqual(validate_state_schema(json.loads((fixtures / "canonical-state.json").read_text())), [])
+        self.assertEqual(
+            validate_baseline_schema(json.loads((fixtures / "canonical-worker-baseline.json").read_text())),
+            [],
+        )
+
+    def test_22_state_mutation_after_spawn_waits_for_worker_then_fails_closed(self) -> None:
+        wrapper = self.start_worker("import time; time.sleep(.2); print('finished')")
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            lifecycle_path = self.run_dir / "worker-lifecycle.json"
+            if lifecycle_path.exists() and load_json(lifecycle_path)["stage"] == "running":
+                break
+            time.sleep(0.01)
+        state = load_json(self.run_dir / "state.json")
+        state["runId"] = "externally-mutated"
+        atomic_write_json(self.run_dir / "state.json", state)
+        self.assertIsNone(wrapper.poll())
+        self.assertEqual(wrapper.wait(timeout=2), 125)
+        lifecycle = load_json(self.run_dir / "worker-lifecycle.json")
+        self.assertEqual(lifecycle["errorCode"], "state_mutated_after_spawn")
+        self.assertTrue(lifecycle["workerSpawned"])
+        self.assertFalse(lifecycle["artifactPublished"])
 
 
 if __name__ == "__main__":

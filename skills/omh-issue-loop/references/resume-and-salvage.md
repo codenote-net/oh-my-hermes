@@ -13,6 +13,8 @@ $HERMES_HOME/runs/omh-issue-loop/<owner>-<repo>-<issue>-<run-id>/
 ├── state.json
 ├── issue-snapshot.json
 ├── worker-baseline.json
+├── worker-lifecycle.json
+├── worker-launch.lock
 ├── worker-output.log
 ├── worker-exit.json
 ├── salvage-evidence.json
@@ -37,11 +39,21 @@ temporary file, flush and `fsync`, atomically rename it, and `fsync` the directo
 Persist state before and after every phase transition. Never rely only on conversation context or
 temporary runner metadata.
 
+Do not hand-author these files. Follow [durable-worker-protocol.md](durable-worker-protocol.md),
+initialize with `init-run-state.py`, and capture each baseline with
+`capture-worker-baseline.py`. Baseline capture consumes separately saved GitHub evidence and never
+accesses or refetches the issue.
+
 ## Select preflight mode
 
-Use `scripts/validate-run-state.py new` or `resume` for the local branch, HEAD, snapshot, and
+Use `scripts/validate-run-state.py new`, `resume`, or `pre-launch` for the local branch, HEAD, snapshot, and
 working-tree checks below. Remote-branch, PR, and GitHub identity comparisons remain orchestrator
 checks because they require authenticated `gh` access.
+
+Immediately before every worker, `pre-launch` validates the complete state and baseline schemas,
+snapshot hash, repository root, branch, HEAD, tree fingerprint, and absence of a live/conflicting
+worker or artifact. The runner repeats it under the launch lock. Failure records
+`preflight_failed` with `workerSpawned=false`.
 
 ### New run
 
@@ -79,6 +91,11 @@ explicitly Human-authorized.
 
 Absence of `worker-exit.json` is never success. It may become `salvageable` only when every gate
 below is evidenced:
+
+A lifecycle showing `artifact_publish_failed` proves the worker started but not that its exit
+artifact was published. Preserve it and apply these fail-closed gates. `preflight_failed` instead
+proves no worker started and is a rejected launch, not salvage. Snake-case, partial, or
+noncanonical records are legacy and are never silently upgraded or confirmed.
 
 1. Full worker identity and every known descendant are confirmed stopped. Missing process identity
    is `indeterminate`; PID alone is insufficient.

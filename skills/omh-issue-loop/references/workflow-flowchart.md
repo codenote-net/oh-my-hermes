@@ -20,6 +20,8 @@ flowchart TD
     O1["Fetch issue exactly once<br/>Save immutable issue snapshot"]:::orchestrator
     O2["Create issue branch from latest default branch"]:::orchestrator
     D0["Atomically persist durable run state<br/>under HERMES_HOME"]:::orchestrator
+    D1["Capture canonical worker baseline<br/>Validate full pre-launch state"]:::orchestrator
+    D2{"Pre-launch valid?"}:::decision
     U0["Restore durable state and snapshot<br/>Do not fetch issue"]:::orchestrator
     U1{"State, repo, branch, HEAD,<br/>snapshot and tree match?"}:::decision
     U2{"Last durable phase?"}:::decision
@@ -68,12 +70,14 @@ flowchart TD
     H3["Human performs final review<br/>and decides whether to merge"]:::human
 
     H0 --> M0
-    M0 -- "New" --> O0 --> O1 --> O2 --> D0 --> W0
+    M0 -- "New" --> O0 --> O1 --> O2 --> D0 --> D1 --> D2
+    D2 -- "No: worker not started" --> S0
+    D2 -- "Yes" --> W0
     M0 -- "Resume" --> U0 --> U1
     U1 -- "No" --> S0
     U1 -- "Yes" --> U2
     U2 -- "Worker incomplete" --> O13
-    U2 -- "Before worker" --> W0
+    U2 -- "Before worker" --> D1
     U2 -- "Worker complete" --> R0
     W0 --> O13 --> Q2
     Q2 -- "indeterminate" --> S0
@@ -136,3 +140,6 @@ flowchart TD
 12. Human review starts immediately after five clean reviews; CI monitoring continues in parallel.
 13. The Human receives a second at-mention only when CI is green for that same reviewed SHA.
 14. The workflow never merges or closes the issue; the final decision belongs to the Human.
+15. Canonical pre-launch validation happens before every worker; rejection durably proves that
+    no child was started.
+16. Lifecycle evidence distinguishes spawn failure from post-exit artifact publication failure.

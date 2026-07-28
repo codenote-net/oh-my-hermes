@@ -22,6 +22,17 @@ descendants, waits for it, and then publishes `worker-exit.json`. Never add shel
 trailing `&`, `nohup`, or another background layer inside the command. Hermes backgrounds exactly
 one tracked wrapper, and the wrapper must remain alive until Codex exits.
 
+Prepare the run using [durable-worker-protocol.md](durable-worker-protocol.md). The wrapper invokes
+the shared pre-launch validator before opening output or calling `subprocess.Popen`. Invalid state
+records `preflight_failed` with `workerSpawned=false`.
+
+## Durable lifecycle
+
+`worker-lifecycle.json` distinguishes preflight rejection, spawn attempt/failure, spawned process
+identity, running, exited status, output fsync, artifact publication failure, and publication.
+Read it before interpreting a missing exit artifact. The runner retains validated `runId`,
+command hash, and launch generation locally; it never rereads mutable state to build the artifact.
+
 ## Protocol v2 artifact
 
 The wrapper writes output to `worker-output.log` and atomically publishes a versioned JSON artifact
@@ -41,7 +52,8 @@ only after the worker returns:
   "finishedAt": "...",
   "exitCode": 0,
   "commandHash": "...",
-  "outputSha256": "..."
+  "outputSha256": "...",
+  "launchStateGeneration": 3
 }
 ```
 
@@ -73,6 +85,8 @@ Classify completion as exactly one of:
   `worker_exit_status: unknown`; never represent it as exit zero.
 - `indeterminate`: a process may live, identity or baseline is missing, comparison is impossible,
   output/tree is unstable, scope is uncertain, or run/snapshot identity is incomplete.
+- `rejected`: canonical lifecycle proves pre-launch validation failed and
+  `workerSpawned=false`. This is a safe stop, never completion or salvage.
 
 `status=exited` with `exit_code=null` from the process API is only a reconciliation trigger. It is
 not a terminal result. Do not begin post-worker checks, inspect a supposedly final diff, or make a
