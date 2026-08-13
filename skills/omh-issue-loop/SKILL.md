@@ -18,6 +18,10 @@ Before launching any background Codex worker, apply
 [worker-completion-reconciliation.md](references/worker-completion-reconciliation.md).
 `exited` with `exit_code=null` is indeterminate; do not begin post-worker checks or make definitive
 working-tree claims before confirmed process termination and quiescence.
+Before every push, read and apply
+[push-completion-reconciliation.md](references/push-completion-reconciliation.md). Launch pushes
+through its single durable background wrapper and do not advance to signoff, PR operations, or
+reviews until reconciliation confirms numeric exit zero and all exact-HEAD postconditions.
 For new-run, resume, durable-state, and legacy salvage rules, read
 [resume-and-salvage.md](references/resume-and-salvage.md) before preflight.
 Use the canonical schemas and official initializer, baseline capture, and pre-launch validator in
@@ -276,8 +280,15 @@ fix commit:
 
 1. Create the signed commit and verify its Git signature according to
    [commit-signing-preflight.md](references/commit-signing-preflight.md).
-2. Push the exact current branch normally. Never force push or rewrite history.
-3. Require a clean working tree, an upstream branch, and `HEAD` equal to the pushed upstream SHA.
+2. Capture the complete push/remote/upstream/PR baseline, then push the exact current branch using
+   the single-layer durable launch and reconciliation protocol in
+   [push-completion-reconciliation.md](references/push-completion-reconciliation.md). Never use a
+   short foreground terminal timeout, force push, rewrite history, bypass hooks, or overlap push
+   attempts. Treat `status=exited, exit_code=null` only as a reconciliation trigger.
+3. Confirm a valid numeric exit zero, complete process-tree death and output quiescence, clean
+   working tree, configured upstream, and equality of local `HEAD`, upstream SHA, and remote OID.
+   If completion is indeterminate, stop before signoff, PR creation/mutation, or review. Retry only
+   after every prior process is proven stopped and the full captured baseline remains unchanged.
 4. Branch on the recorded mode:
    - If `signoff_required=false`, record `signoff: not required` with the evidence used to make
      that decision, then continue.

@@ -44,7 +44,7 @@ flowchart TD
     H1["Human decides whether to continue manually<br/>or start a new run"]:::human
 
     O5["Full validation and signing preflight"]:::orchestrator
-    O6["Hermes creates signed commit<br/>and pushes exact HEAD"]:::orchestrator
+    O6["Hermes creates signed commit<br/>durably pushes and reconciles exact HEAD"]:::orchestrator
     G0{"Signoff required<br/>by this repository?"}:::decision
     G1["Sign off and verify<br/>exact pushed HEAD"]:::orchestrator
     O11["Open draft PR"]:::orchestrator
@@ -52,7 +52,7 @@ flowchart TD
     R3{"All five reviews complete<br/>with zero high findings?"}:::decision
     L1{"Shared fix count<br/>below 10?"}:::decision
     W2["Codex restricted PR or CI fix worker"]:::worker
-    O9["Reconcile worker, safety check, and validation<br/>Hermes signs, commits, and pushes"]:::orchestrator
+    O9["Reconcile worker, safety check, and validation<br/>Hermes signs, commits, durably pushes and reconciles"]:::orchestrator
     G2{"Signoff required<br/>by this repository?"}:::decision
     G3["Re-sign off and verify<br/>new pushed HEAD"]:::orchestrator
 
@@ -143,3 +143,5 @@ flowchart TD
 15. Canonical pre-launch validation happens before every worker; rejection durably proves that
     no child was started.
 16. Lifecycle evidence distinguishes spawn failure from post-exit artifact publication failure.
+17. Pushes use one long-running background wrapper; numeric exit, full process-tree/output
+    quiescence, and exact remote/upstream postconditions are all required before signoff or PR work.
