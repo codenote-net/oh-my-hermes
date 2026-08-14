@@ -1,8 +1,9 @@
 # Reviewer Artifact Reconciliation
 
-Use `scripts/reconcile-reviewer.py` for every Codex, Claude, PR, security, and fresh-clone behavior
-review. The artifact directory must contain `metadata.json`, `baseline.json`, `stdout.log`,
-`stderr.log`, and an atomically published `exit.json`.
+Launch every Codex, Claude, PR, security, and fresh-clone behavior review through
+`scripts/run-reviewer.py`, then reconcile it with `scripts/reconcile-reviewer.py`. The artifact
+directory must be absent or empty before launch. The runner writes `metadata.json`,
+`baseline.json`, `stdout.log`, `stderr.log`, and an atomically published `exit.json`.
 
 `metadata.json` records `commandHash`, the full process identity, known descendants, target SHA,
 review kind, and whether command evidence is required. `baseline.json` records the repository
@@ -10,7 +11,23 @@ HEAD, porcelain status, and common Git configuration hash before launch. `exit.j
 exactly the matching command hash, process identity, target SHA, integer exit status, stdout and
 stderr hashes, and timestamps.
 
-Run:
+Launch the reviewer as a foreground child of the durable wrapper:
+
+```bash
+python3 scripts/run-reviewer.py \
+  --artifact-dir <review-artifact-dir> \
+  --repository <standalone-clone> \
+  --target-sha <sha> \
+  --review-kind <kind> \
+  --require-command-evidence \
+  -- <reviewer-command> <arguments...>
+```
+
+Keep the wrapper itself in the single Hermes background task. Do not background the reviewer
+command inside the wrapper. Omit `--require-command-evidence` unless the review is behavior
+verification.
+
+After the wrapper exits or its completion notification is lost, run:
 
 ```bash
 python3 scripts/reconcile-reviewer.py \

@@ -14,6 +14,7 @@ from pathlib import Path
 SKILL = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL / "scripts"
 RECONCILER = SCRIPTS / "reconcile-reviewer.py"
+RUNNER = SCRIPTS / "run-reviewer.py"
 sys.path.insert(0, str(SCRIPTS))
 
 from reviewer_protocol import common_git_config_hash  # noqa: E402
@@ -125,6 +126,119 @@ class ReviewerProtocolTests(unittest.TestCase):
 
     def test_dead_without_artifact_is_indeterminate(self):
         (self.artifacts / "exit.json").unlink(); _, result = self.reconcile(); self.assertEqual(result["classification"], "indeterminate")
+
+
+class ReviewerRunnerTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.root = Path(self.temp.name)
+        self.repo = self.root / "repo"
+        self.repo.mkdir()
+        self.git("init", "-q")
+        self.git("config", "user.name", "Test")
+        self.git("config", "user.email", "test@example.com")
+        (self.repo / "file").write_text("base\n")
+        self.git("add", "file")
+        self.git("commit", "-q", "-m", "base")
+        self.head = self.git("rev-parse", "HEAD").stdout.strip()
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def git(self, *args: str):
+        return subprocess.run(
+            ["git", "-C", str(self.repo), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    def run_reviewer(self, artifact_dir: Path, *extra: str):
+        report = "Review completed successfully.\nHigh-priority findings: 0\n"
+        return subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER),
+                "--artifact-dir",
+                str(artifact_dir),
+                "--repository",
+                str(self.repo),
+                "--target-sha",
+                self.head,
+                "--review-kind",
+                "code",
+                *extra,
+                "--",
+                sys.executable,
+                "-c",
+                f"print({report!r}, end='')",
+            ],
+            capture_output=True,
+            text=True,
+        )
+
+    def test_runner_publishes_artifacts_that_reconcile(self):
+        artifacts = self.root / "artifacts"
+        run = self.run_reviewer(artifacts)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(
+            {path.name for path in artifacts.iterdir()},
+            {"baseline.json", "metadata.json", "stdout.log", "stderr.log", "exit.json"},
+        )
+        reconcile = subprocess.run(
+            [
+                sys.executable,
+                str(RECONCILER),
+                "--artifact-dir",
+                str(artifacts),
+                "--repository",
+                str(self.repo),
+                "--expected-head",
+                self.head,
+                "--interval",
+                "0.01",
+                "--timeout",
+                "1.0",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(reconcile.returncode, 0, reconcile.stdout + reconcile.stderr)
+        self.assertEqual(json.loads(reconcile.stdout)["classification"], "confirmed")
+
+    def test_runner_rejects_a_stale_target_before_launch(self):
+        run = subprocess.run(
+            [
+                sys.executable,
+                str(RUNNER),
+                "--artifact-dir",
+                str(self.root / "artifacts"),
+                "--repository",
+                str(self.repo),
+                "--target-sha",
+                "0" * 40,
+                "--review-kind",
+                "code",
+                "--",
+                sys.executable,
+                "-c",
+                "print('must not run')",
+            ],
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(run.returncode, 125)
+        self.assertIn("does not match target", run.stderr)
+
+    def test_runner_preserves_existing_artifacts(self):
+        artifacts = self.root / "artifacts"
+        artifacts.mkdir()
+        marker = artifacts / "keep"
+        marker.write_text("existing\n")
+        run = self.run_reviewer(artifacts)
+        self.assertEqual(run.returncode, 125)
+        self.assertEqual(marker.read_text(), "existing\n")
+        self.assertEqual({path.name for path in artifacts.iterdir()}, {"keep"})
 
 
 if __name__ == "__main__":

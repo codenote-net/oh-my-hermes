@@ -43,7 +43,12 @@ Use these settings verbatim on every applicable child invocation:
 - **Codex CLI**: `model="gpt-5.6-sol"`, `model_reasoning_effort="low"`, `service_tier="fast"`
   - Pass `--yolo` before the `exec` or `review` subcommand.
   - Implementation prompt: `/goal`, followed by the parent-provided issue snapshot.
-  - Local review prompt: `/review`
+  - Local review prompt: `/review`.
+  - When a review artifact must satisfy a strict machine-readable output contract, prefer
+    `codex --yolo exec --ephemeral ... <prompt>` with `/review` in the prompt. Dedicated review
+    frontends may post-process model output and can move, reformat, or omit required markers such
+    as the standalone `High-priority findings: N` line. Treat a missing marker as
+    `incomplete_report`; do not weaken the artifact schema or accept the output ad hoc.
   - Fix only high-priority findings without widening scope.
 - **Claude Code CLI**: model `Opus 4.7`, reasoning effort `high`
   - Pass `--permission-mode auto --model claude-opus-4-7 --effort high -p`.
