@@ -15,6 +15,10 @@ Use this map to understand the complete workflow before executing the detailed i
 ```mermaid
 flowchart TD
     H0["Human supplies one GitHub issue URL"]:::human
+    T0["Every orchestrator turn<br/>Recovery sweep"]:::orchestrator
+    T1{"Non-terminal durable phase?"}:::decision
+    T2["Reconcile process, artifact,<br/>hashes, SHA, and quiescence"]:::orchestrator
+    T3{"Reconciliation result?"}:::decision
     M0{"New run or explicit resume?"}:::decision
     O0["New-run preflight<br/>Require clean tree and unused branch"]:::orchestrator
     O1["Fetch issue exactly once<br/>Save immutable issue snapshot"]:::orchestrator
@@ -69,7 +73,13 @@ flowchart TD
     O10["Update CI result and at-mention Human again<br/>All applicable CI is green"]:::orchestrator
     H3["Human performs final review<br/>and decides whether to merge"]:::human
 
-    H0 --> M0
+    H0 --> T0 --> T1
+    T1 -- "No" --> M0
+    T1 -- "Yes" --> T2 --> T3
+    T3 -- "Valid completed artifact" --> U2
+    T3 -- "Still running: no duplicate" --> S0
+    T3 -- "Dead without artifact" --> S0
+    T3 -- "Stale SHA" --> R2
     M0 -- "New" --> O0 --> O1 --> O2 --> D0 --> D1 --> D2
     D2 -- "No: worker not started" --> S0
     D2 -- "Yes" --> W0
@@ -145,3 +155,7 @@ flowchart TD
 16. Lifecycle evidence distinguishes spawn failure from post-exit artifact publication failure.
 17. Pushes use one long-running background wrapper; numeric exit, full process-tree/output
     quiescence, and exact remote/upstream postconditions are all required before signoff or PR work.
+18. Notifications only prompt reconciliation. Every turn recovers valid completed artifacts and
+    continues unblocked phases without rerunning completed operations.
+19. Reviewer state distinguishes `reviewer_running`, `reviewer_artifact_published`,
+    `reviewer_reconciled`, and `review_gate_complete`.
