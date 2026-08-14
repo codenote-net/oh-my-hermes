@@ -23,7 +23,9 @@ allowance (at least ten minutes, or longer when the discovered repository valida
 ```text
 terminal(
   command="python3 <skill>/scripts/run-push.py --run-dir <attempt-dir> \
-    --repository <repo-root> --run-id <unique-attempt-id> -- \
+    --repository <repo-root> --run-id <run-id> --attempt-id <unique-attempt-id> \
+    --deadline <iso-8601-deadline> \
+    --resume-after-completion '<exact next action>' -- \
     git push --set-upstream origin <branch>",
   background=true,
   notify_on_complete=true
@@ -37,6 +39,12 @@ check), and remains alive until Git returns. It durably preserves `push-stdout.l
 exit status and output hashes. The metadata retains every descendant identity observed while the
 push runs, including `git remote-https`, the pre-push hook, and validation descendants.
 
+The wrapper also persists `push-operation-state.json` with the command hash, target SHA, expected
+artifact paths, deadline, process tree, and exact continuation. It transitions through
+`push_launch_pending`, `push_running`, and `push_artifact_published`. Successful reconciliation
+writes `push_reconciled`; when a valid artifact remained unprocessed for more than five minutes,
+it also records `lost_or_unprocessed_completion_notification` and the recovery timestamps.
+
 ## Reconcile completion
 
 Run `scripts/reconcile-push.py` after any notification, timeout, anomaly, or apparent exit.
@@ -45,10 +53,11 @@ Run `scripts/reconcile-push.py` after any notification, timeout, anomaly, or app
 Require at least two stable stdout/stderr observations and confirmed death of the full recorded
 process identity and every known descendant identity. Identity is PID plus process start token and
 command, never PID alone. An exited or zombie launcher does not release this gate while a recorded
-descendant remains alive. A reparented/detached descendant remains part of the known tree. If any
-identity cannot be checked, any output remains unstable, or complete termination cannot be
-proved, classify the attempt `indeterminate`, preserve evidence, warn that side effects may still
-occur, and stop.
+descendant remains alive. A reparented descendant that remains in the supervised process group
+stays part of the known tree. The push and its hooks must not create a new session or otherwise
+escape that group. If any identity cannot be checked, any output remains unstable, or complete
+termination cannot be proved, classify the attempt `indeterminate`, preserve evidence, warn that
+side effects may still occur, and stop.
 
 Validate `push-exit.json` protocol, run identity, command hash, full process identity, integer exit
 code, and both output hashes. A missing or mismatched artifact is `indeterminate`, even when the

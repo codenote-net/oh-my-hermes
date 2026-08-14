@@ -7,21 +7,20 @@ import argparse
 import fcntl
 import json
 import os
-import subprocess
 import sys
 import time
 from pathlib import Path
 from typing import Any
 
+from operation_protocol import spawn_gated
 from worker_protocol import (
     PROTOCOL_VERSION,
     atomic_write_json,
     command_hash,
-    descendant_identities,
     lifecycle_record,
     load_json,
     pre_launch_errors,
-    process_identity,
+    process_group_identities,
     sha256_file,
     update_state,
     utc_now,
@@ -140,12 +139,34 @@ def main() -> int:
         try:
             output = output_path.open("xb")
             try:
-                worker = subprocess.Popen(
+                identity: dict[str, Any] = {}
+
+                def publish_identity(identity_value: dict[str, Any]) -> None:
+                    nonlocal identity
+                    identity = identity_value
+                    update_state(
+                        run_dir,
+                        expected_generation=launch_generation,
+                        currentPhase="worker_running",
+                        workerPid=identity_value["pid"],
+                        workerStartTime=started_at,
+                        workerProcessIdentity=identity_value,
+                    )
+                    lifecycle.update(
+                        stage="spawned",
+                        workerSpawned=True,
+                        workerPid=identity_value["pid"],
+                        processIdentity=identity_value,
+                        updatedAt=utc_now(),
+                    )
+                    publish_lifecycle(lifecycle_path, lifecycle)
+
+                worker = spawn_gated(
                     arguments.command,
                     cwd=repository,
                     stdout=output,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=False,
+                    stderr=output,
+                    publish_identity=publish_identity,
                 )
             except Exception:
                 output.close()
@@ -161,54 +182,15 @@ def main() -> int:
             structured_error("spawn_failed", [str(error)], spawned=False, published=False)
             return 125
 
-        identity = process_identity(worker.pid)
-        if identity is None:
-            worker.terminate()
-            worker.wait()
-            output.flush()
-            os.fsync(output.fileno())
-            output.close()
-            lifecycle.update(
-                stage="spawned",
-                workerSpawned=True,
-                workerPid=worker.pid,
-                errorCode="identity_capture_failed",
-                errors=["could not capture worker process identity"],
-                updatedAt=utc_now(),
-            )
-            publish_lifecycle(lifecycle_path, lifecycle)
-            structured_error("identity_capture_failed", lifecycle["errors"], spawned=True, published=False)
-            return 125
         launch_identity["workerPid"] = worker.pid
         launch_identity["workerProcessIdentity"] = identity
 
         known_descendants: dict[tuple[int, str, str], dict[str, Any]] = {}
-        lifecycle.update(
-            stage="spawned",
-            workerSpawned=True,
-            workerPid=worker.pid,
-            processIdentity=identity,
-            updatedAt=utc_now(),
-        )
-        publish_lifecycle(lifecycle_path, lifecycle)
         state_error: str | None = None
-        try:
-            update_state(
-                run_dir,
-                expected_generation=launch_generation,
-                currentPhase="worker_running",
-                workerPid=worker.pid,
-                workerStartTime=started_at,
-                workerProcessIdentity=identity,
-            )
-        except Exception as error:
-            # The child has started. Keep the wrapper alive until it really exits;
-            # lifecycle evidence, not mutable state, records its identity.
-            state_error = str(error)
         lifecycle.update(stage="running", updatedAt=utc_now())
         publish_lifecycle(lifecycle_path, lifecycle)
         while worker.poll() is None:
-            for descendant in descendant_identities(worker.pid):
+            for descendant in process_group_identities(worker.pid):
                 key = (descendant["pid"], descendant["startToken"], descendant["command"])
                 known_descendants[key] = descendant
             descendants = list(known_descendants.values())

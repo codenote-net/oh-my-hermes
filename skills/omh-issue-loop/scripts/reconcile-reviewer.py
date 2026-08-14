@@ -7,11 +7,11 @@ import argparse
 import json
 import sys
 import time
-from datetime import datetime, timezone
 from pathlib import Path
 
+from operation_protocol import binding_errors, recovery_updates, state_errors, update_state
 from reviewer_protocol import artifact_errors, load, process_state, report_errors, repository_observation
-from worker_protocol import sha256_file
+from worker_protocol import process_group_identities, sha256_file
 
 
 def main() -> int:
@@ -26,16 +26,28 @@ def main() -> int:
     args = parser.parse_args()
     directory, repository = args.artifact_dir.resolve(), args.repository.resolve()
     paths = {name: directory / name for name in ("metadata.json", "baseline.json", "stdout.log", "stderr.log", "exit.json")}
+    state_path = directory / "operation-state.json"
+    if not state_path.is_file():
+        result = {"classification": "indeterminate", "reasons": ["missing operation-state.json"]}
+        print(json.dumps(result, indent=2, sort_keys=True)); return 2
+    state = load(state_path)
+    errors = state_errors(state, "reviewer")
+    if errors:
+        result = {"classification": "invalid", "reasons": errors}
+        print(json.dumps(result, indent=2, sort_keys=True)); return 2
     missing = [name for name, path in paths.items() if not path.is_file()]
     if "metadata.json" in missing or "baseline.json" in missing:
         result = {"classification": "indeterminate", "reasons": [f"missing {name}" for name in missing]}
         print(json.dumps(result, indent=2, sort_keys=True)); return 2
     metadata, baseline = load(paths["metadata.json"]), load(paths["baseline.json"])
-    identity = metadata.get("processIdentity")
-    descendants = metadata.get("knownDescendantIdentities", [])
     deadline, previous, stable = time.monotonic() + args.timeout, None, 0
     while time.monotonic() <= deadline:
-        states = [process_state(identity), *(process_state(item) for item in descendants)]
+        state = load(state_path)
+        metadata = load(paths["metadata.json"])
+        identity = metadata.get("processIdentity")
+        descendants = metadata.get("knownDescendantIdentities", [])
+        observed_group = process_group_identities(identity["pid"]) if isinstance(identity, dict) and isinstance(identity.get("pid"), int) else []
+        states = [process_state(identity), *(process_state(item) for item in descendants), *(process_state(item) for item in observed_group)]
         live = states[0] == "live" or any(state in {"live", "zombie"} for state in states[1:])
         if live:
             stable, previous = 0, None
@@ -46,6 +58,21 @@ def main() -> int:
             if stable >= args.observations:
                 break
         time.sleep(args.interval)
+    bindings = binding_errors(
+        state,
+        metadata,
+        target_sha=metadata.get("targetSha", ""),
+        expected_artifact_paths={
+            "metadata": str(paths["metadata.json"]),
+            "baseline": str(paths["baseline.json"]),
+            "stdout": str(paths["stdout.log"]),
+            "stderr": str(paths["stderr.log"]),
+            "exit": str(paths["exit.json"]),
+        },
+    )
+    if bindings:
+        result = {"classification": "invalid", "reasons": bindings}
+        print(json.dumps(result, indent=2, sort_keys=True)); return 2
     if live:
         result = {"classification": "running", "reasons": ["reviewer process tree is still live; duplicate launch prohibited"]}
     elif stable < args.observations:
@@ -69,12 +96,12 @@ def main() -> int:
             else:
                 errors = report_errors(paths["stdout.log"].read_text(encoding="utf-8", errors="replace"), args.require_command_evidence)
                 result = {"classification": "incomplete_report" if errors else "confirmed", "reasons": errors}
-        finished = artifact.get("finishedAt")
-        try:
-            age = (datetime.now(timezone.utc) - datetime.fromisoformat(finished.replace("Z", "+00:00"))).total_seconds()
-        except (AttributeError, ValueError):
-            age = None
-        result["lostNotificationCandidate"] = bool(age is not None and age > 300 and result["classification"] == "confirmed")
+        if result["classification"] == "confirmed":
+            updates = recovery_updates(state, artifact.get("finishedAt"))
+            update_state(state_path, "reviewer", phase="reviewer_reconciled", **updates)
+            result["lostNotificationCandidate"] = bool(updates)
+            if updates:
+                result["recoveryReason"] = updates["recoveryReason"]
     print(json.dumps(result, indent=2, sort_keys=True))
     return 0 if result["classification"] == "confirmed" else 2
 

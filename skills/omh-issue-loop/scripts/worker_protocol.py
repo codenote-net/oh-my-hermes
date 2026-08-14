@@ -241,7 +241,11 @@ def identity_is_live(identity: dict[str, Any] | None) -> bool:
     if not identity or not isinstance(identity.get("pid"), int):
         return False
     current = process_identity(identity["pid"])
-    return bool(current and current == identity)
+    return bool(
+        current
+        and current.get("pid") == identity.get("pid")
+        and current.get("startToken") == identity.get("startToken")
+    )
 
 
 def descendant_identities(root_pid: int) -> list[dict[str, Any]]:
@@ -271,8 +275,39 @@ def descendant_identities(root_pid: int) -> list[dict[str, Any]]:
     return sorted(found, key=lambda item: item["pid"])
 
 
+def process_group_identities(root_pid: int) -> list[dict[str, Any]]:
+    result = subprocess.run(
+        ["ps", "-axo", "pid=,pgid=,lstart=,comm="],
+        capture_output=True, text=True, check=False,
+    )
+    if result.returncode != 0:
+        return []
+    identities = []
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 8:
+            continue
+        pid, process_group = int(parts[0]), int(parts[1])
+        if process_group == root_pid and pid != root_pid:
+            identities.append({
+                "pid": pid,
+                "startToken": " ".join(parts[2:7]),
+                "command": " ".join(parts[7:]),
+            })
+    return sorted(identities, key=lambda item: item["pid"])
+
+
 def any_identity_is_live(identity: dict[str, Any] | None, descendants: list[dict[str, Any]]) -> bool:
-    return identity_is_live(identity) or any(identity_is_live(item) for item in descendants)
+    process_group = (
+        process_group_identities(identity["pid"])
+        if identity and isinstance(identity.get("pid"), int)
+        else []
+    )
+    return (
+        identity_is_live(identity)
+        or any(identity_is_live(item) for item in descendants)
+        or bool(process_group)
+    )
 
 
 def git(repository: Path, *arguments: str) -> bytes:

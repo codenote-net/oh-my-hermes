@@ -40,6 +40,27 @@ that remains alive until its child exits and atomically publishes lifecycle, std
 an exit artifact with numeric status, hashes, `startedAt`, and `finishedAt`, including filesystem
 syncs before notification.
 
+Prevent an identity-publication race by keeping each newly forked child behind a launch gate.
+Publish its PID, start token, captured command, and continuation state durably before releasing it
+to execute the requested command. If publication fails or the wrapper dies first, close the gate
+without executing the requested command. Use PID plus start token for liveness across the gated
+`exec`; retain the captured command and exact requested-command hash as separate audit evidence.
+Run the released command in a dedicated process group. Enumerate that group during both wrapper
+supervision and reconciliation so a helper that reparents after its direct parent exits remains
+part of the completion gate. Commands and their hooks must not call `setsid`, request a new
+session, or otherwise escape the supervised process group. Such an escape violates the launch
+contract; fail closed when there is evidence of one. Cross-session daemon supervision requires
+runtime or OS containment and must not be inferred from an ordinary process-table sweep.
+
+For push and reviewer attempts, treat `push-operation-state.json` and `operation-state.json`
+respectively as the canonical per-attempt continuation records. Require the operation phase,
+command hash, target SHA, expected artifact paths, deadline, process tree, and continuation action
+to match the artifacts before advancing the main run state.
+Reload operation state and metadata during reconciliation so descendants discovered after the
+first observation remain part of the process tree. Permit metadata to contain additional observed
+descendants when state publication lagged, but reject any state identity that metadata does not
+bind.
+
 ## Continuation invariant
 
 After accepting an artifact, execute every currently unblocked phase in the same turn. A status
