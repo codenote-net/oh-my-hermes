@@ -14,6 +14,12 @@ Before starting, read [workflow-flowchart.md](references/workflow-flowchart.md) 
 end-to-end phases, ownership boundaries, loops, stop paths, CI gate, and Human handoff. Use it as
 the workflow map; this file remains the authoritative source for detailed requirements.
 
+Before waiting on or responding after any background task, read and apply
+[lost-notification-recovery.md](references/lost-notification-recovery.md). At the start of every
+orchestrator turn, reconcile non-terminal durable phases before replying. Never treat notification
+delivery as the only continuation trigger. When the Human requests status, first complete the
+recovery sweep and every currently unblocked continuation step, then report the resulting state.
+
 Before launching any background Codex worker, apply
 [worker-completion-reconciliation.md](references/worker-completion-reconciliation.md).
 `exited` with `exit_code=null` is indeterminate; do not begin post-worker checks or make definitive
@@ -24,6 +30,9 @@ through its single durable background wrapper and do not advance to signoff, PR 
 reviews until reconciliation confirms numeric exit zero and all exact-HEAD postconditions.
 For new-run, resume, durable-state, and legacy salvage rules, read
 [resume-and-salvage.md](references/resume-and-salvage.md) before preflight.
+For every background reviewer or verifier, read
+[reviewer-artifact-reconciliation.md](references/reviewer-artifact-reconciliation.md) and use
+`scripts/reconcile-reviewer.py`; never accept reviewer output ad hoc.
 Use the canonical schemas and official initializer, baseline capture, and pre-launch validator in
 [durable-worker-protocol.md](references/durable-worker-protocol.md). Never hand-author state.
 
@@ -236,7 +245,9 @@ the worker to infer the boundary from the surrounding workflow.
    - Codex `/review` against the branch diff from the recorded base.
    - Claude Code `/code-review` against the same diff.
    - Claude Code `/security-review` against the same diff.
-9. Run long jobs in the background when supported and poll them to terminal completion. Preserve
+9. Run long jobs in the background when supported and poll them to terminal completion. Before
+   launch, durably record the exact `resumeAfterCompletion` action and expected artifact paths.
+   Preserve
    stdout, stderr, exit status, and target SHA for each artifact. A review that prints a
    complete-looking report but times out, hangs, or has no recorded exit status is incomplete.
    Retry with a narrower read-only prompt when appropriate, but never count a partial artifact as
@@ -325,6 +336,9 @@ the new HEAD before running any of the five reviews for that HEAD.
    - Claude Code `/security-review` locally.
    - Claude Code `/review #<pr-number>` against the PR.
    - Claude Code behavior verification in a fresh worktree.
+   Persist explicit states `reviewer_running`, `reviewer_artifact_published`,
+   `reviewer_reconciled`, and `review_gate_complete`; never use a generic waiting-for-notification
+   phase.
 5. For fresh-worktree verification, create a separate temporary worktree at the exact remote PR
    head, pass the immutable issue snapshot into the verifier prompt, read the repository
    instructions, run or exercise the real behavior and the relevant discovered validation
@@ -384,7 +398,9 @@ in parallel with Human review, and is monitored by the orchestrator in the backg
 
 ### Monitor CI in the background
 
-1. Start monitoring only after the ready state and preliminary handoff are verified. Record the
+1. Start monitoring only after the ready state and preliminary handoff are verified. On recovery,
+   first inspect the complete check set; if it is already terminal green for the reviewed SHA,
+   skip a new polling loop and complete the PR-body update and final handoff in this turn. Record the
    current PR head SHA, then inspect all checks with `gh pr checks <pr-url> --json
    name,state,bucket,link,workflow`. Run watch or polling in the background so Human review is not
    blocked, and preserve every terminal status transition.

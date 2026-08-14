@@ -32,6 +32,11 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--repository", type=Path, required=True)
+    parser.add_argument(
+        "--resume-after-completion",
+        default="reconcile worker artifact, apply side-effect checks, and continue the issue loop",
+    )
+    parser.add_argument("--deadline")
     parser.add_argument("command", nargs=argparse.REMAINDER)
     arguments = parser.parse_args()
     if arguments.command[:1] == ["--"]:
@@ -102,6 +107,13 @@ def main() -> int:
             expected_generation=validated_generation,
             currentPhase="worker_launch_validated",
             workerCommandHash=digest,
+            resumeAfterCompletion=arguments.resume_after_completion,
+            launchDeadline=arguments.deadline,
+            expectedArtifactPaths={
+                "lifecycle": str(lifecycle_path),
+                "stdout": str(output_path),
+                "exit": str(exit_path),
+            },
         )
         launch_generation = launch_state["stateGeneration"]
         launch_identity = {

@@ -7,6 +7,7 @@ import argparse
 import json
 import sys
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -192,11 +193,29 @@ def main() -> int:
         else:
             result["reasons"].append("insufficient evidence that a worker was started")
 
+    recovery_updates: dict[str, Any] = {}
+    if result["completionStatus"] == "confirmed":
+        finished_at = artifact.get("finishedAt")
+        try:
+            age = (datetime.now(timezone.utc) - datetime.fromisoformat(finished_at.replace("Z", "+00:00"))).total_seconds()
+        except (AttributeError, ValueError):
+            age = 0
+        if age > 300 and state.get("currentPhase") in {
+            "worker_running", "worker_exit_published", "pending_completion", "pending_reconciliation"
+        }:
+            recovery_updates = {
+                "recoveryReason": "lost_or_unprocessed_completion_notification",
+                "artifactFinishedAt": finished_at,
+                "recoveredAt": datetime.now(timezone.utc).isoformat(),
+                "resumedFromPhase": state.get("currentPhase"),
+            }
+            result["recoveryReason"] = recovery_updates["recoveryReason"]
     update_state(
         run_dir,
         completionMode=result["completionMode"],
         workerExitStatus=result["workerExitStatus"],
         reconciliationResult=result,
+        **recovery_updates,
     )
     json.dump(result, sys.stdout, indent=2, sort_keys=True)
     sys.stdout.write("\n")
