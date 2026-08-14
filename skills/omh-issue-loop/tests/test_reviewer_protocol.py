@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -49,7 +51,7 @@ class ReviewerProtocolTests(unittest.TestCase):
         value.update(changes); self.write("exit.json", value)
 
     def reconcile(self, *extra: str):
-        run = subprocess.run([sys.executable, str(RECONCILER), "--artifact-dir", str(self.artifacts), "--repository", str(self.repo), "--expected-head", self.head, "--interval", "0.01", "--timeout", "0.2", *extra], capture_output=True, text=True)
+        run = subprocess.run([sys.executable, str(RECONCILER), "--artifact-dir", str(self.artifacts), "--repository", str(self.repo), "--expected-head", self.head, "--interval", "0.01", "--timeout", "1.0", *extra], capture_output=True, text=True)
         return run, json.loads(run.stdout)
 
     def test_valid_artifact_confirms_without_notification(self):
@@ -64,7 +66,7 @@ class ReviewerProtocolTests(unittest.TestCase):
         self.publish_exit(targetSha="0" * 40); _, result = self.reconcile(); self.assertEqual(result["classification"], "stale_target")
 
     def test_alive_without_artifact_is_running(self):
-        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(1)"])
+        sleeper = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
         try:
             started = subprocess.run(["ps", "-p", str(sleeper.pid), "-o", "lstart=", "-o", "comm="], capture_output=True, text=True, check=True).stdout.split()
             metadata = json.loads((self.artifacts / "metadata.json").read_text())
@@ -73,6 +75,40 @@ class ReviewerProtocolTests(unittest.TestCase):
             _, result = self.reconcile(); self.assertEqual(result["classification"], "running")
         finally:
             sleeper.terminate(); sleeper.wait()
+
+    @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX process semantics")
+    def test_zombie_launcher_with_valid_artifact_confirms(self):
+        zombie_pid = os.fork()
+        if zombie_pid == 0:
+            os._exit(0)
+        try:
+            for _ in range(100):
+                process = subprocess.run(
+                    ["ps", "-p", str(zombie_pid), "-o", "state=", "-o", "lstart=", "-o", "comm="],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                )
+                if process.stdout.lstrip().startswith("Z"):
+                    break
+                time.sleep(0.01)
+            else:
+                self.fail("child did not become a zombie")
+            fields = process.stdout.split()
+            self.identity = {
+                "pid": zombie_pid,
+                "startToken": " ".join(fields[1:6]),
+                "command": " ".join(fields[6:]),
+            }
+            metadata = json.loads((self.artifacts / "metadata.json").read_text())
+            metadata["processIdentity"] = self.identity
+            self.write("metadata.json", metadata)
+            self.publish_exit()
+            run, result = self.reconcile()
+            self.assertEqual(run.returncode, 0)
+            self.assertEqual(result["classification"], "confirmed")
+        finally:
+            os.waitpid(zombie_pid, 0)
 
     def test_blank_report_is_incomplete(self):
         self.stdout.write_text("\n"); self.publish_exit(); _, result = self.reconcile(); self.assertEqual(result["classification"], "incomplete_report")
