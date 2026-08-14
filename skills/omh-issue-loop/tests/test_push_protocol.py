@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 SKILL = Path(__file__).resolve().parents[1]
@@ -18,7 +19,7 @@ from push_protocol import (  # noqa: E402
     retry_errors,
     validate_exit_artifact,
 )
-from worker_protocol import command_hash, sha256_file  # noqa: E402
+from worker_protocol import atomic_write_json, command_hash, load_json, sha256_file  # noqa: E402
 
 
 class PushProtocolTests(unittest.TestCase):
@@ -72,6 +73,37 @@ class PushProtocolTests(unittest.TestCase):
         self.assertEqual(reconcile.returncode, 0, reconcile.stdout + reconcile.stderr)
         self.assertEqual(json.loads(reconcile.stdout)["status"], "confirmed")
         self.assertIn("hook-ran", (attempt / "push-stderr.log").read_text())
+        state = load_json(attempt / "push-operation-state.json")
+        self.assertEqual(state["phase"], "push_reconciled")
+        self.assertEqual(
+            state["resumeAfterCompletion"],
+            "reconcile the push artifact and continue publication for the exact HEAD",
+        )
+
+    def test_01b_old_unprocessed_push_records_recovery(self) -> None:
+        attempt = self.root / "attempt"; attempt.mkdir()
+        run = subprocess.run([
+            sys.executable, str(SCRIPTS / "run-push.py"), "--run-dir", str(attempt),
+            "--repository", str(self.repo), "--run-id", "push-old", "--",
+            "git", "push", "--set-upstream", "origin", "topic",
+        ], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+        artifact = load_json(attempt / "push-exit.json")
+        artifact["finishedAt"] = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat()
+        atomic_write_json(attempt / "push-exit.json", artifact)
+        state = load_json(attempt / "push-operation-state.json")
+        state["phase"] = "push_running"
+        atomic_write_json(attempt / "push-operation-state.json", state)
+        reconcile = subprocess.run([
+            sys.executable, str(SCRIPTS / "reconcile-push.py"), "--run-dir", str(attempt),
+            "--repository", str(self.repo), "--branch", "topic", "--interval", "0.01",
+        ], capture_output=True, text=True)
+        self.assertEqual(reconcile.returncode, 0, reconcile.stdout + reconcile.stderr)
+        result = json.loads(reconcile.stdout)
+        self.assertEqual(result["recoveryReason"], "lost_or_unprocessed_completion_notification")
+        state = load_json(attempt / "push-operation-state.json")
+        self.assertEqual(state["phase"], "push_reconciled")
+        self.assertEqual(state["resumedFromPhase"], "push_running")
 
     def test_02_null_notification_with_live_descendant_prohibits_retry(self) -> None:
         status, _ = self.classify(exit_code=None, process_tree_quiescent=False)

@@ -18,7 +18,8 @@ RUNNER = SCRIPTS / "run-reviewer.py"
 sys.path.insert(0, str(SCRIPTS))
 
 from reviewer_protocol import common_git_config_hash  # noqa: E402
-from worker_protocol import sha256_file  # noqa: E402
+from operation_protocol import initial_state  # noqa: E402
+from worker_protocol import process_identity, sha256_file  # noqa: E402
 
 
 class ReviewerProtocolTests(unittest.TestCase):
@@ -34,7 +35,25 @@ class ReviewerProtocolTests(unittest.TestCase):
         self.stdout.write_text("Review complete with adequate detail.\nHigh-priority findings: 0\n")
         self.stderr.write_text("")
         self.identity = {"pid": 999999, "startToken": "missing", "command": "reviewer"}
-        self.write("metadata.json", {"commandHash": "a" * 64, "processIdentity": self.identity, "knownDescendantIdentities": [], "targetSha": self.head, "reviewKind": "code", "requireCommandEvidence": False})
+        self.write("metadata.json", {"commandHash": "a" * 64, "attemptId": "review-1", "deadline": None, "resumeAfterCompletion": "continue review gate", "processIdentity": self.identity, "knownDescendantIdentities": [], "targetSha": self.head, "reviewKind": "code", "requireCommandEvidence": False})
+        state = initial_state(
+            operation_kind="reviewer",
+            attempt_id="review-1",
+            command_hash="a" * 64,
+            target_sha=self.head,
+            expected_artifact_paths={
+                "metadata": str(self.artifacts.resolve() / "metadata.json"),
+                "baseline": str(self.artifacts.resolve() / "baseline.json"),
+                "stdout": str(self.artifacts.resolve() / "stdout.log"),
+                "stderr": str(self.artifacts.resolve() / "stderr.log"),
+                "exit": str(self.artifacts.resolve() / "exit.json"),
+            },
+            deadline=None,
+            resume_after_completion="continue review gate",
+        )
+        state["phase"] = "reviewer_artifact_published"
+        state["processIdentity"] = self.identity
+        self.write("operation-state.json", state)
         self.write("baseline.json", {"head": self.head, "statusPorcelain": "", "commonGitConfigSha256": common_git_config_hash(self.repo)})
         self.publish_exit()
 
@@ -61,9 +80,19 @@ class ReviewerProtocolTests(unittest.TestCase):
     def test_hash_mismatch_is_invalid(self):
         self.publish_exit(stdoutSha256="0" * 64); _, result = self.reconcile(); self.assertEqual(result["classification"], "invalid")
 
+    def test_operation_state_mismatch_is_invalid(self):
+        state = json.loads((self.artifacts / "operation-state.json").read_text())
+        state["commandHash"] = "b" * 64
+        self.write("operation-state.json", state)
+        _, result = self.reconcile()
+        self.assertEqual(result["classification"], "invalid")
+        self.assertIn("operation state command hash mismatch", result["reasons"])
+
     def test_stale_sha_is_rejected(self):
         metadata = json.loads((self.artifacts / "metadata.json").read_text())
         metadata["targetSha"] = "0" * 40; self.write("metadata.json", metadata)
+        state = json.loads((self.artifacts / "operation-state.json").read_text())
+        state["targetSha"] = "0" * 40; self.write("operation-state.json", state)
         self.publish_exit(targetSha="0" * 40); _, result = self.reconcile(); self.assertEqual(result["classification"], "stale_target")
 
     def test_alive_without_artifact_is_running(self):
@@ -73,9 +102,53 @@ class ReviewerProtocolTests(unittest.TestCase):
             metadata = json.loads((self.artifacts / "metadata.json").read_text())
             metadata["processIdentity"] = {"pid": sleeper.pid, "startToken": " ".join(started[:5]), "command": " ".join(started[5:])}
             self.write("metadata.json", metadata); (self.artifacts / "exit.json").unlink()
+            state = json.loads((self.artifacts / "operation-state.json").read_text())
+            state["processIdentity"] = metadata["processIdentity"]
+            state["phase"] = "reviewer_running"
+            self.write("operation-state.json", state)
             _, result = self.reconcile(); self.assertEqual(result["classification"], "running")
         finally:
             sleeper.terminate(); sleeper.wait()
+
+    def test_reconciler_refreshes_late_descendant_identities(self):
+        launcher = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        descendant = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        try:
+            launcher_identity = process_identity(launcher.pid)
+            descendant_identity = process_identity(descendant.pid)
+            self.assertIsNotNone(launcher_identity)
+            self.assertIsNotNone(descendant_identity)
+            self.identity = launcher_identity
+            metadata = json.loads((self.artifacts / "metadata.json").read_text())
+            metadata["processIdentity"] = launcher_identity
+            self.write("metadata.json", metadata)
+            state = json.loads((self.artifacts / "operation-state.json").read_text())
+            state["processIdentity"] = launcher_identity
+            state["phase"] = "reviewer_running"
+            self.write("operation-state.json", state)
+            self.publish_exit()
+            reconcile = subprocess.Popen(
+                [
+                    sys.executable, str(RECONCILER), "--artifact-dir", str(self.artifacts),
+                    "--repository", str(self.repo), "--expected-head", self.head,
+                    "--interval", "0.05", "--timeout", "0.4",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+            )
+            time.sleep(0.1)
+            metadata["knownDescendantIdentities"] = [descendant_identity]
+            self.write("metadata.json", metadata)
+            state["knownDescendantIdentities"] = [descendant_identity]
+            self.write("operation-state.json", state)
+            launcher.terminate(); launcher.wait()
+            stdout, stderr = reconcile.communicate(timeout=2)
+            self.assertEqual(json.loads(stdout)["classification"], "running", stderr)
+        finally:
+            if launcher.poll() is None:
+                launcher.terminate(); launcher.wait()
+            descendant.terminate(); descendant.wait()
 
     @unittest.skipUnless(hasattr(os, "fork"), "requires POSIX process semantics")
     def test_zombie_launcher_with_valid_artifact_confirms(self):
@@ -104,6 +177,9 @@ class ReviewerProtocolTests(unittest.TestCase):
             metadata = json.loads((self.artifacts / "metadata.json").read_text())
             metadata["processIdentity"] = self.identity
             self.write("metadata.json", metadata)
+            state = json.loads((self.artifacts / "operation-state.json").read_text())
+            state["processIdentity"] = self.identity
+            self.write("operation-state.json", state)
             self.publish_exit()
             run, result = self.reconcile()
             self.assertEqual(run.returncode, 0)
@@ -122,7 +198,13 @@ class ReviewerProtocolTests(unittest.TestCase):
 
     def test_old_valid_artifact_marks_recovery_candidate(self):
         old = (datetime.now(timezone.utc) - timedelta(minutes=6)).isoformat(); self.publish_exit(finishedAt=old)
+        state = json.loads((self.artifacts / "operation-state.json").read_text())
+        state["phase"] = "reviewer_running"; self.write("operation-state.json", state)
         _, result = self.reconcile(); self.assertTrue(result["lostNotificationCandidate"])
+        state = json.loads((self.artifacts / "operation-state.json").read_text())
+        self.assertEqual(state["phase"], "reviewer_reconciled")
+        self.assertEqual(state["recoveryReason"], "lost_or_unprocessed_completion_notification")
+        self.assertEqual(state["resumedFromPhase"], "reviewer_running")
 
     def test_dead_without_artifact_is_indeterminate(self):
         (self.artifacts / "exit.json").unlink(); _, result = self.reconcile(); self.assertEqual(result["classification"], "indeterminate")
@@ -183,7 +265,10 @@ class ReviewerRunnerTests(unittest.TestCase):
         self.assertEqual(run.returncode, 0, run.stderr)
         self.assertEqual(
             {path.name for path in artifacts.iterdir()},
-            {"baseline.json", "metadata.json", "stdout.log", "stderr.log", "exit.json"},
+            {
+                "baseline.json", "metadata.json", "operation-state.json", "stdout.log",
+                "stderr.log", "exit.json",
+            },
         )
         reconcile = subprocess.run(
             [
@@ -205,6 +290,12 @@ class ReviewerRunnerTests(unittest.TestCase):
         )
         self.assertEqual(reconcile.returncode, 0, reconcile.stdout + reconcile.stderr)
         self.assertEqual(json.loads(reconcile.stdout)["classification"], "confirmed")
+        state = json.loads((artifacts / "operation-state.json").read_text())
+        self.assertEqual(state["phase"], "reviewer_reconciled")
+        self.assertEqual(
+            state["resumeAfterCompletion"],
+            "reconcile the reviewer artifact and continue the exact-SHA review gate",
+        )
 
     def test_runner_rejects_a_stale_target_before_launch(self):
         run = subprocess.run(

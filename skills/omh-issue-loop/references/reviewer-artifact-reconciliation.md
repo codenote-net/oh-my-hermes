@@ -3,7 +3,8 @@
 Launch every Codex, Claude, PR, security, and fresh-clone behavior review through
 `scripts/run-reviewer.py`, then reconcile it with `scripts/reconcile-reviewer.py`. The artifact
 directory must be absent or empty before launch. The runner writes `metadata.json`,
-`baseline.json`, `stdout.log`, `stderr.log`, and an atomically published `exit.json`.
+`baseline.json`, `operation-state.json`, `stdout.log`, `stderr.log`, and an atomically published
+`exit.json`.
 
 `metadata.json` records `commandHash`, the full process identity, known descendants, target SHA,
 review kind, and whether command evidence is required. `baseline.json` records the repository
@@ -19,13 +20,23 @@ python3 scripts/run-reviewer.py \
   --repository <standalone-clone> \
   --target-sha <sha> \
   --review-kind <kind> \
+  --attempt-id <unique-attempt-id> \
+  --deadline <iso-8601-deadline> \
+  --resume-after-completion '<exact next action>' \
   --require-command-evidence \
   -- <reviewer-command> <arguments...>
 ```
 
 Keep the wrapper itself in the single Hermes background task. Do not background the reviewer
-command inside the wrapper. Omit `--require-command-evidence` unless the review is behavior
-verification.
+command inside the wrapper, call `setsid`, or request a new session that escapes the wrapper's
+supervised process group. Omit `--require-command-evidence` unless the review is behavior
+verification. Treat evidence of a process-group escape as indeterminate and fail closed.
+
+The runner transitions `operation-state.json` through `reviewer_launch_pending`,
+`reviewer_running`, and `reviewer_artifact_published`. The reconciler writes
+`reviewer_reconciled` after accepting the artifact and records the recovery reason and timestamps
+when an artifact remained unprocessed for more than five minutes. The orchestrator writes
+`review_gate_complete` to the main run state only after all five exact-SHA sources pass.
 
 After the wrapper exits or its completion notification is lost, run:
 

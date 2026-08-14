@@ -19,7 +19,8 @@ terminal(
 
 `run-worker.py` starts Codex as a foreground child, records its process identity and known
 descendants, waits for it, and then publishes `worker-exit.json`. Never add shell `(...) &`, a
-trailing `&`, `nohup`, or another background layer inside the command. Hermes backgrounds exactly
+trailing `&`, `nohup`, `setsid`, a new-session request, or another background layer inside the
+command. Hermes backgrounds exactly
 one tracked wrapper, and the wrapper must remain alive until Codex exits.
 
 Prepare the run using [durable-worker-protocol.md](durable-worker-protocol.md). The wrapper invokes
