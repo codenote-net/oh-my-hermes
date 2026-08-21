@@ -248,9 +248,13 @@ codex exec --ephemeral --sandbox read-only \
 claude --permission-mode plan -p \
   --model claude-opus-4-7 --effort high \
   --no-session-persistence \
-  --disallowedTools Edit,Write,NotebookEdit \
+  --disallowedTools Edit Write NotebookEdit -- \
   '<EPIC-DECOMPOSITION REVIEW PROMPT>'
 ```
+
+`--disallowedTools` is variadic in current Claude Code releases. The explicit `--` terminates its
+values before the positional prompt. Without it, Claude can parse the prompt as additional deny
+rules and exit without producing a review report.
 
 Give both reviewers the canonical epic URL for provenance, frozen epic snapshot, target SHA, user
 request, applicable instruction paths, evidence manifest, and complete decomposition revision.
