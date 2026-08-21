@@ -49,6 +49,16 @@ Run the repository installer to symlink each skill and plugin directory, and to 
 ./scripts/install.sh
 ```
 
+If Hermes is already running, refresh its in-process skill cache after installation:
+
+```text
+/reload-skills
+```
+
+Invoke an installed skill with its generated direct slash command, for example
+`/omh-plan-epic-issue`. `/skills` manages the Skills Hub, so `/skills
+omh-plan-epic-issue` is parsed as an unknown Hub action rather than a skill invocation.
+
 Set `HERMES_DIR` to install into a location other than `~/.hermes`. You can also copy `config/config.example.yaml` to `~/.hermes/config.yaml` manually and fill in your own values.
 
 Never commit secrets to this repository.
