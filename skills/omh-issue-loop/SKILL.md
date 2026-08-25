@@ -40,22 +40,27 @@ Use the canonical schemas and official initializer, baseline capture, and pre-la
 
 Use these settings verbatim on every applicable child invocation:
 
-- **Codex CLI**: `model="gpt-5.6-sol"`, `model_reasoning_effort="low"`, `service_tier="fast"`
-  - Pass `--yolo` before the `exec` or `review` subcommand.
-  - Implementation prompt: `/goal`, followed by the parent-provided issue snapshot.
-  - Local review prompt: `/review`.
-  - When a review artifact must satisfy a strict machine-readable output contract, prefer
-    `codex --yolo exec --ephemeral ... <prompt>` with `/review` in the prompt. Dedicated review
-    frontends may post-process model output and can move, reformat, or omit required markers such
-    as the standalone `High-priority findings: N` line. Treat a missing marker as
-    `incomplete_report`; do not weaken the artifact schema or accept the output ad hoc.
-  - Fix only high-priority findings without widening scope.
-- **Claude Code CLI**: model `Opus 4.7`, reasoning effort `high`
-  - Pass `--permission-mode auto --model claude-opus-4-7 --effort high -p`.
-  - Local review prompt: `/code-review`
-  - Security review prompt: `/security-review`
-  - PR review prompt: `/review #<pr-number>`
-  - Perform behavior verification from a fresh worktree.
+- **Codex implementation and fixes**: `model="gpt-5.6-sol"`,
+  `model_reasoning_effort="low"`, `service_tier="fast"`; use `/goal` followed by the
+  parent-provided issue snapshot.
+- **Codex local review**: `model="gpt-5.6-sol"`, `model_reasoning_effort="low"`,
+  `service_tier="fast"`; use `/review`.
+- **Claude Code local code review**: model `Sonnet 5` (`claude-sonnet-5`), reasoning effort
+  `high`; use `/code-review`.
+- **Claude Code local security review**: model `Opus 4.7` (`claude-opus-4-7`), reasoning effort
+  `high`; use `/security-review`.
+- **Claude Code PR review**: model `Opus 4.7` (`claude-opus-4-7`), reasoning effort `high`; use
+  `/review #<pr-number>`.
+- **Claude Code fresh-worktree behavior verification**: model `Sonnet 5`
+  (`claude-sonnet-5`), reasoning effort `medium`; perform the verification from a fresh worktree.
+
+Pass `--yolo` before every Codex `exec` or `review` subcommand. When a Codex review artifact must
+satisfy a strict machine-readable output contract, prefer
+`codex --yolo exec --ephemeral ... <prompt>` with `/review` in the prompt. Dedicated review
+frontends may post-process model output and can move, reformat, or omit required markers such as
+the standalone `High-priority findings: N` line. Treat a missing marker as `incomplete_report`;
+do not weaken the artifact schema or accept the output ad hoc. Codex fix workers may fix only
+high-priority findings without widening scope.
 
 Apply Codex settings per process; never edit global configuration. Use this command shape:
 
@@ -64,11 +69,27 @@ codex --yolo exec --ephemeral -c model='"gpt-5.6-sol"' \
   -c model_reasoning_effort='"low"' -c service_tier='"fast"' '<PROMPT>'
 ```
 
-Use `claude --permission-mode auto -p --model claude-opus-4-7 --effort high
---no-session-persistence '<PROMPT>'` for Claude Code. Give every child the parent-captured issue
-snapshot and explicitly forbid it from fetching the issue again. Give every reviewer the issue
-URL for provenance, current branch or PR target, repository instructions, and a request to label
-each finding `critical`, `high`, `medium`, or `low`.
+Apply the selected Claude Code model and effort per process; never rely on a global default. Use
+these command shapes:
+
+```bash
+# Local code review
+claude --permission-mode auto -p --model claude-sonnet-5 --effort high \
+  --no-session-persistence '<CODE_REVIEW_PROMPT>'
+
+# Local security review and PR review
+claude --permission-mode auto -p --model claude-opus-4-7 --effort high \
+  --no-session-persistence '<SECURITY_OR_PR_REVIEW_PROMPT>'
+
+# Fresh-worktree behavior verification
+claude --permission-mode auto -p --model claude-sonnet-5 --effort medium \
+  --no-session-persistence '<BEHAVIOR_VERIFICATION_PROMPT>'
+```
+
+Give every child the parent-captured issue snapshot and explicitly forbid it from fetching the
+issue again. Give every reviewer the issue URL for provenance, current branch or PR target,
+repository instructions, and a request to label each finding `critical`, `high`, `medium`, or
+`low`.
 
 ## Single-fetch issue snapshot
 
