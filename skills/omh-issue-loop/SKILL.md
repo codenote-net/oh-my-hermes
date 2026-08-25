@@ -172,7 +172,10 @@ the worker to infer the boundary from the surrounding workflow.
    ----- END ISSUE SNAPSHOT -----
 
    The issue snapshot above is authoritative. Do not run `gh issue view`, call `gh api` for this
-   issue, or otherwise fetch the issue. Do not infer missing requirements from live GitHub state.
+   issue, or otherwise fetch the issue. Do not fetch any linked parent, dependency, related, or
+   other GitHub issue either. If required information is absent from the snapshot or repository,
+   report it as a blocker instead of retrieving live GitHub issue data. Do not infer missing
+   requirements from live GitHub state.
 
    Strict restrictions:
    - Do not create, amend, or reset any commit.
@@ -250,6 +253,14 @@ the worker to infer the boundary from the surrounding workflow.
    - Codex `/review` against the branch diff from the recorded base.
    - Claude Code `/code-review` against the same diff.
    - Claude Code `/security-review` against the same diff.
+   Require a concrete output schema, not only prose such as “label every finding”: each finding
+   must include an explicit `severity` field whose value is `critical`, `high`, `medium`, or `low`,
+   and the final line must be exactly `High-priority findings: N`. State that omission of any
+   severity makes the report incomplete. If a reviewer returns the final count but omits per-finding
+   severities, do not infer which findings are high and do not promote all ambiguous findings.
+   Launch one narrower read-only classification artifact that preserves the existing findings
+   verbatim, forbids new findings and repository commands, and adds only the missing severities plus
+   the canonical final count. Reconcile that artifact normally before aggregating the gate.
 9. Run long jobs in the background when supported and poll them to terminal completion. Before
    launch, durably record the exact `resumeAfterCompletion` action and expected artifact paths.
    Preserve

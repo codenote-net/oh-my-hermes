@@ -6,13 +6,18 @@ legacy evidence and can never be confirmed as protocol v2.
 
 ## Official preparation sequence
 
-The orchestrator performs the only `gh issue view`, saves its JSON outside the repository, and
-then runs:
+The orchestrator performs the only `gh issue view` and saves its JSON outside the repository.
+The source snapshot file must also be outside `$run_dir`: `init-run-state.py` requires the run
+directory to be absent or empty and atomically copies the snapshot into it. In new-run mode, run
+the `new` validator before creating the issue branch, because that validator intentionally rejects
+an already-existing local branch. Then create the branch and initialize state:
 
 ```bash
+python3 scripts/validate-run-state.py new --repository "$repo" --branch "$branch"
+git switch --create "$branch" "origin/$default_branch"
 python3 scripts/init-run-state.py --run-dir "$run_dir" --repository "$repo" \
   --repository-identity owner/repo --issue-url "$issue_url" \
-  --issue-snapshot "$snapshot_file" --signoff-required false
+  --issue-snapshot "$snapshot_file_outside_run_dir" --signoff-required false
 ```
 
 Before each worker, the orchestrator separately captures authenticated GitHub evidence. The
@@ -29,6 +34,27 @@ python3 scripts/validate-run-state.py pre-launch --run-dir "$run_dir" --reposito
 `run-worker.py` repeats the shared pre-launch validation while holding the run launch lock. Any
 missing, unknown, mistyped, or inconsistent field causes a structured rejection with
 `workerSpawned=false`; `subprocess.Popen` is not reached.
+
+### Repeated worker attempts in one run
+
+The canonical worker filenames at the run root are single-attempt slots. Before capturing the
+baseline for a later fix worker, require the previous worker to be fully reconciled and its
+post-worker safety/report checks to be complete. Then move its immutable evidence into a unique
+attempt directory such as `worker-attempts/implementation-0/` or `worker-attempts/fix-1/`:
+
+- `worker-baseline.json`;
+- `worker-output.log`;
+- `worker-exit.json`;
+- `worker-lifecycle.json`;
+- the attempt prompt and post-worker safety/report evidence when present.
+
+Never delete or overwrite confirmed evidence, and never archive an indeterminate or live attempt.
+Archive the old `worker-baseline.json` **before** running `capture-worker-baseline.py` for the next
+attempt; the helper intentionally writes the canonical root slot. After archival, update the
+orchestrator-owned state fields and fingerprint, capture the new authenticated GitHub evidence and
+worker baseline, and require `validate-run-state.py pre-launch` to pass. Its conflict errors for
+existing canonical worker artifacts are a safety gate, not files to remove without preservation.
+The launch-lock file may remain at the run root and is reused by later attempts.
 
 ## Canonical `state.json`
 
