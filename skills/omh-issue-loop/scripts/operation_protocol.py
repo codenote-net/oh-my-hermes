@@ -66,6 +66,7 @@ def spawn_gated(
     stdout: BinaryIO,
     stderr: BinaryIO,
     publish_identity: Callable[[dict[str, Any]], None],
+    pre_release_check: Callable[[], None] | None = None,
 ) -> GatedProcess:
     """Fork a blocked child, publish its identity durably, then permit exec."""
     read_fd, write_fd = os.pipe()
@@ -99,6 +100,8 @@ def spawn_gated(
         if identity is None:
             raise RuntimeError("could not capture gated process identity")
         publish_identity(identity)
+        if pre_release_check is not None:
+            pre_release_check()
         os.write(write_fd, b"1")
     except BaseException:
         try:

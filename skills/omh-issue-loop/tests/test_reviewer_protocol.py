@@ -15,9 +15,10 @@ SKILL = Path(__file__).resolve().parents[1]
 SCRIPTS = SKILL / "scripts"
 RECONCILER = SCRIPTS / "reconcile-reviewer.py"
 RUNNER = SCRIPTS / "run-reviewer.py"
+NORMALIZER = SCRIPTS / "normalize-review-candidate.py"
 sys.path.insert(0, str(SCRIPTS))
 
-from reviewer_protocol import common_git_config_hash  # noqa: E402
+from reviewer_protocol import REVIEW_PROTOCOL_VERSION, common_git_config_hash  # noqa: E402
 from operation_protocol import initial_state  # noqa: E402
 from worker_protocol import process_identity, sha256_file  # noqa: E402
 
@@ -28,14 +29,60 @@ class ReviewerProtocolTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.repo, self.artifacts = self.root / "repo", self.root / "artifacts"
         self.repo.mkdir(); self.artifacts.mkdir()
-        self.git("init", "-q"); self.git("config", "user.name", "Test"); self.git("config", "user.email", "test@example.com")
+        self.git("init", "-q"); self.git("config", "user.name", "Test"); self.git("config", "user.email", "test@example.com"); self.git("config", "commit.gpgsign", "false")
         (self.repo / "file").write_text("base\n"); self.git("add", "file"); self.git("commit", "-q", "-m", "base")
         self.head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.remote = self.root / "origin.git"
+        subprocess.run(["git", "init", "-q", "--bare", str(self.remote)], check=True)
+        self.git("remote", "add", "origin", str(self.remote))
+        branch = self.git("branch", "--show-current").stdout.strip()
+        self.git("push", "-q", "-u", "origin", branch)
+        bin_dir = self.root / "bin"
+        bin_dir.mkdir()
+        gh = bin_dir / "gh"
+        gh.write_text(
+            "#!/usr/bin/env python3\n"
+            "import json, sys\n"
+            "print(json.dumps([] if sys.argv[1:3] == ['pr', 'list'] else {}))\n"
+        )
+        gh.chmod(0o755)
+        self.env = {**os.environ, "PATH": f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"}
+        self.run_dir = self.root / "run"
+        self.run_dir.mkdir()
+        (self.run_dir / "issue-snapshot.json").write_text('{"issue": 1}\n')
+        allowed = self.root / "allowed.json"
+        allowed.write_text("[]\n")
+        normalized = subprocess.run(
+            [
+                sys.executable, str(NORMALIZER),
+                "--run-dir", str(self.run_dir),
+                "--repository", str(self.repo),
+                "--allowed-paths-json", str(allowed),
+                "--round-id", "fixture-round",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        normalization = json.loads(normalized.stdout)
         self.stdout = self.artifacts / "stdout.log"; self.stderr = self.artifacts / "stderr.log"
         self.stdout.write_text("Review complete with adequate detail.\nHigh-priority findings: 0\n")
         self.stderr.write_text("")
         self.identity = {"pid": 999999, "startToken": "missing", "command": "reviewer"}
-        self.write("metadata.json", {"commandHash": "a" * 64, "attemptId": "review-1", "deadline": None, "resumeAfterCompletion": "continue review gate", "processIdentity": self.identity, "knownDescendantIdentities": [], "targetSha": self.head, "reviewKind": "code", "requireCommandEvidence": False})
+        self.write("baseline.json", {
+            "schemaVersion": REVIEW_PROTOCOL_VERSION,
+            "head": self.head,
+            "statusPorcelain": "",
+            "commonGitConfigSha256": common_git_config_hash(self.repo),
+            "capturedAt": datetime.now(timezone.utc).isoformat(),
+            "normalizationArtifact": normalization["artifactPath"],
+            "normalizationSha256": normalization["artifactSha256"],
+            "roundId": "fixture-round",
+            "repositoryState": json.loads(Path(normalization["artifactPath"]).read_text())["after"],
+        })
+        self.baseline_sha256 = sha256_file(self.artifacts / "baseline.json")
+        self.write("metadata.json", {"protocolVersion": REVIEW_PROTOCOL_VERSION, "commandHash": "a" * 64, "attemptId": "review-1", "deadline": None, "resumeAfterCompletion": "continue review gate", "processIdentity": self.identity, "knownDescendantIdentities": [], "targetSha": self.head, "baselineSha256": self.baseline_sha256, "reviewKind": "code", "requireCommandEvidence": False})
         state = initial_state(
             operation_kind="reviewer",
             attempt_id="review-1",
@@ -54,7 +101,6 @@ class ReviewerProtocolTests(unittest.TestCase):
         state["phase"] = "reviewer_artifact_published"
         state["processIdentity"] = self.identity
         self.write("operation-state.json", state)
-        self.write("baseline.json", {"head": self.head, "statusPorcelain": "", "commonGitConfigSha256": common_git_config_hash(self.repo)})
         self.publish_exit()
 
     def tearDown(self) -> None:
@@ -67,11 +113,11 @@ class ReviewerProtocolTests(unittest.TestCase):
         (self.artifacts / name).write_text(json.dumps(value))
 
     def publish_exit(self, **changes) -> None:
-        value = {"protocolVersion": 1, "commandHash": "a" * 64, "processIdentity": self.identity, "targetSha": self.head, "exitCode": 0, "stdoutSha256": sha256_file(self.stdout), "stderrSha256": sha256_file(self.stderr), "startedAt": "2026-08-14T00:00:00+00:00", "finishedAt": datetime.now(timezone.utc).isoformat()}
+        value = {"protocolVersion": REVIEW_PROTOCOL_VERSION, "commandHash": "a" * 64, "processIdentity": self.identity, "targetSha": self.head, "baselineSha256": self.baseline_sha256, "exitCode": 0, "stdoutSha256": sha256_file(self.stdout), "stderrSha256": sha256_file(self.stderr), "startedAt": "2026-08-14T00:00:00+00:00", "finishedAt": datetime.now(timezone.utc).isoformat()}
         value.update(changes); self.write("exit.json", value)
 
     def reconcile(self, *extra: str):
-        run = subprocess.run([sys.executable, str(RECONCILER), "--artifact-dir", str(self.artifacts), "--repository", str(self.repo), "--expected-head", self.head, "--interval", "0.01", "--timeout", "1.0", *extra], capture_output=True, text=True)
+        run = subprocess.run([sys.executable, str(RECONCILER), "--artifact-dir", str(self.artifacts), "--repository", str(self.repo), "--expected-head", self.head, "--interval", "0.01", "--timeout", "1.0", *extra], capture_output=True, text=True, env=self.env)
         return run, json.loads(run.stdout)
 
     def test_valid_artifact_confirms_without_notification(self):
@@ -79,6 +125,94 @@ class ReviewerProtocolTests(unittest.TestCase):
 
     def test_hash_mismatch_is_invalid(self):
         self.publish_exit(stdoutSha256="0" * 64); _, result = self.reconcile(); self.assertEqual(result["classification"], "invalid")
+
+    def test_baseline_tampering_is_invalid(self):
+        baseline = json.loads((self.artifacts / "baseline.json").read_text())
+        baseline["statusPorcelain"] = "tampered"
+        self.write("baseline.json", baseline)
+        _, result = self.reconcile()
+        self.assertEqual(result["classification"], "invalid")
+        self.assertIn("baseline hash mismatch", result["reasons"])
+
+    def test_protocol_v2_requires_complete_normalization_baseline(self):
+        baseline = json.loads((self.artifacts / "baseline.json").read_text())
+        for field in ("normalizationArtifact", "normalizationSha256", "roundId", "repositoryState"):
+            baseline.pop(field)
+        self.write("baseline.json", baseline)
+        self.baseline_sha256 = sha256_file(self.artifacts / "baseline.json")
+        metadata = json.loads((self.artifacts / "metadata.json").read_text())
+        metadata["baselineSha256"] = self.baseline_sha256
+        self.write("metadata.json", metadata)
+        self.publish_exit()
+        _, result = self.reconcile()
+        self.assertEqual(result["classification"], "invalid")
+        self.assertIn("reviewer baseline schema is invalid", result["reasons"])
+
+    def test_reconciler_uses_post_quiescence_baseline_bytes(self):
+        original_baseline = (self.artifacts / "baseline.json").read_bytes()
+        (self.repo / "file").write_text("mutated\n")
+        allowed = self.root / "attack-allowed.json"
+        allowed.write_text("[]\n")
+        normalized = subprocess.run(
+            [
+                sys.executable, str(NORMALIZER),
+                "--run-dir", str(self.run_dir),
+                "--repository", str(self.repo),
+                "--allowed-paths-json", str(allowed),
+                "--round-id", "attack-round",
+            ],
+            check=True,
+            capture_output=True,
+            text=True,
+            env=self.env,
+        )
+        attack = json.loads(normalized.stdout)
+        malicious_baseline = json.loads(original_baseline)
+        malicious_baseline.update(
+            statusPorcelain=self.git("status", "--porcelain=v1", "--untracked-files=all").stdout,
+            normalizationArtifact=attack["artifactPath"],
+            normalizationSha256=attack["artifactSha256"],
+            roundId="attack-round",
+            repositoryState=json.loads(Path(attack["artifactPath"]).read_text())["after"],
+        )
+        self.write("baseline.json", malicious_baseline)
+        launcher = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"])
+        try:
+            identity = process_identity(launcher.pid)
+            self.assertIsNotNone(identity)
+            metadata = json.loads((self.artifacts / "metadata.json").read_text())
+            metadata["processIdentity"] = identity
+            self.write("metadata.json", metadata)
+            state = json.loads((self.artifacts / "operation-state.json").read_text())
+            state["processIdentity"] = identity
+            state["phase"] = "reviewer_running"
+            self.write("operation-state.json", state)
+            self.identity = identity
+            self.publish_exit()
+            reconcile = subprocess.Popen(
+                [
+                    sys.executable, str(RECONCILER),
+                    "--artifact-dir", str(self.artifacts),
+                    "--repository", str(self.repo),
+                    "--expected-head", self.head,
+                    "--interval", "0.05",
+                    "--timeout", "2.0",
+                ],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                env=self.env,
+            )
+            time.sleep(0.15)
+            (self.artifacts / "baseline.json").write_bytes(original_baseline)
+            launcher.terminate()
+            launcher.wait()
+            stdout, stderr = reconcile.communicate(timeout=3)
+            self.assertEqual(json.loads(stdout)["classification"], "side_effect_detected", stderr)
+        finally:
+            if launcher.poll() is None:
+                launcher.terminate()
+                launcher.wait()
 
     def test_operation_state_mismatch_is_invalid(self):
         state = json.loads((self.artifacts / "operation-state.json").read_text())
@@ -215,14 +349,43 @@ class ReviewerRunnerTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name)
         self.repo = self.root / "repo"
+        self.remote = self.root / "remote.git"
         self.repo.mkdir()
+        subprocess.run(["git", "init", "--bare", "-q", str(self.remote)], check=True)
         self.git("init", "-q")
         self.git("config", "user.name", "Test")
         self.git("config", "user.email", "test@example.com")
+        self.git("config", "commit.gpgsign", "false")
         (self.repo / "file").write_text("base\n")
         self.git("add", "file")
         self.git("commit", "-q", "-m", "base")
+        self.git("remote", "add", "origin", str(self.remote))
+        self.git("push", "-q", "-u", "origin", "HEAD")
         self.head = self.git("rev-parse", "HEAD").stdout.strip()
+        self.run_dir = self.root / "run"
+        self.run_dir.mkdir()
+        (self.run_dir / "issue-snapshot.json").write_text("{}\n")
+        allowed = self.root / "allowed.json"
+        allowed.write_text("[]\n")
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+        gh = self.bin / "gh"
+        gh.write_text("#!/bin/sh\n[ \"$1 $2\" = \"pr list\" ] && printf '[]\\n' && exit 0\nexit 2\n")
+        gh.chmod(0o700)
+        self.env = os.environ.copy()
+        self.env["PATH"] = f"{self.bin}{os.pathsep}{self.env['PATH']}"
+        normalized = subprocess.run(
+            [
+                sys.executable, str(NORMALIZER), "--run-dir", str(self.run_dir),
+                "--repository", str(self.repo), "--allowed-paths-json", str(allowed),
+                "--round-id", "round-1",
+            ],
+            capture_output=True,
+            text=True,
+            env=self.env,
+            check=True,
+        )
+        self.normalization = json.loads(normalized.stdout)
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -249,6 +412,12 @@ class ReviewerRunnerTests(unittest.TestCase):
                 self.head,
                 "--review-kind",
                 "code",
+                "--normalization-artifact",
+                self.normalization["artifactPath"],
+                "--normalization-sha256",
+                self.normalization["artifactSha256"],
+                "--round-id",
+                "round-1",
                 *extra,
                 "--",
                 sys.executable,
@@ -257,6 +426,7 @@ class ReviewerRunnerTests(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            env=self.env,
         )
 
     def test_runner_publishes_artifacts_that_reconcile(self):
@@ -287,6 +457,7 @@ class ReviewerRunnerTests(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            env=self.env,
         )
         self.assertEqual(reconcile.returncode, 0, reconcile.stdout + reconcile.stderr)
         self.assertEqual(json.loads(reconcile.stdout)["classification"], "confirmed")
@@ -310,6 +481,12 @@ class ReviewerRunnerTests(unittest.TestCase):
                 "0" * 40,
                 "--review-kind",
                 "code",
+                "--normalization-artifact",
+                self.normalization["artifactPath"],
+                "--normalization-sha256",
+                self.normalization["artifactSha256"],
+                "--round-id",
+                "round-1",
                 "--",
                 sys.executable,
                 "-c",
@@ -317,6 +494,7 @@ class ReviewerRunnerTests(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            env=self.env,
         )
         self.assertEqual(run.returncode, 125)
         self.assertIn("does not match target", run.stderr)
