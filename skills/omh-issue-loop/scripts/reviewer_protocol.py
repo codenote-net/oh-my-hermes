@@ -12,7 +12,7 @@ from typing import Any
 
 from worker_protocol import identity_is_live, sha256_file
 
-REVIEW_PROTOCOL_VERSION = 1
+REVIEW_PROTOCOL_VERSION = 2
 SHA_RE = re.compile(r"^[0-9a-f]{40,64}$")
 HIGH_COUNT_RE = re.compile(r"(?im)^\s*(?:high(?:[- ]priority)?(?:\s+findings?)?|critical\s+findings?)\s*[:=]\s*(\d+)\s*$")
 COMMAND_RE = re.compile(r"(?im)^\s*(?:command|cmd)\s*[:=]\s*(\S.*)$")
@@ -66,16 +66,24 @@ def process_state(identity: dict[str, Any] | None) -> str:
     return "live" if identity_is_live(identity) else "stopped"
 
 
-def artifact_errors(artifact: dict[str, Any], metadata: dict[str, Any], stdout: Path, stderr: Path) -> list[str]:
-    required = {"protocolVersion", "commandHash", "processIdentity", "targetSha", "exitCode", "stdoutSha256", "stderrSha256", "startedAt", "finishedAt"}
+def artifact_errors(
+    artifact: dict[str, Any],
+    metadata: dict[str, Any],
+    baseline_sha256: str,
+    stdout: Path,
+    stderr: Path,
+) -> list[str]:
+    required = {"protocolVersion", "commandHash", "processIdentity", "targetSha", "baselineSha256", "exitCode", "stdoutSha256", "stderrSha256", "startedAt", "finishedAt"}
     errors = []
     if set(artifact) != required:
         errors.append("exit artifact schema is invalid")
     if artifact.get("protocolVersion") != REVIEW_PROTOCOL_VERSION:
         errors.append("protocol version mismatch")
-    for field in ("commandHash", "processIdentity", "targetSha"):
+    for field in ("commandHash", "processIdentity", "targetSha", "baselineSha256"):
         if artifact.get(field) != metadata.get(field):
             errors.append(f"{field} mismatch")
+    if artifact.get("baselineSha256") != baseline_sha256:
+        errors.append("baseline hash mismatch")
     if not isinstance(artifact.get("exitCode"), int):
         errors.append("exit status is not an integer")
     if artifact.get("stdoutSha256") != sha256_file(stdout):

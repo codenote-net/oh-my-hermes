@@ -4,14 +4,37 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import time
 from pathlib import Path
 
 from operation_protocol import binding_errors, recovery_updates, state_errors, update_state
-from reviewer_protocol import artifact_errors, load, process_state, report_errors, repository_observation
+from normalization_protocol import validate_normalization_artifact
+from reviewer_protocol import (
+    REVIEW_PROTOCOL_VERSION,
+    artifact_errors,
+    load,
+    process_state,
+    report_errors,
+    repository_observation,
+)
 from worker_protocol import process_group_identities, sha256_file
+
+
+BASELINE_FIELDS = {
+    "schemaVersion", "head", "statusPorcelain", "commonGitConfigSha256", "capturedAt",
+    "normalizationArtifact", "normalizationSha256", "roundId", "repositoryState",
+}
+
+
+def load_hashed_json(path: Path) -> tuple[dict, str]:
+    payload = path.read_bytes()
+    value = json.loads(payload)
+    if not isinstance(value, dict):
+        raise ValueError(f"{path.name} is not a JSON object")
+    return value, hashlib.sha256(payload).hexdigest()
 
 
 def main() -> int:
@@ -39,7 +62,7 @@ def main() -> int:
     if "metadata.json" in missing or "baseline.json" in missing:
         result = {"classification": "indeterminate", "reasons": [f"missing {name}" for name in missing]}
         print(json.dumps(result, indent=2, sort_keys=True)); return 2
-    metadata, baseline = load(paths["metadata.json"]), load(paths["baseline.json"])
+    metadata = load(paths["metadata.json"])
     deadline, previous, stable = time.monotonic() + args.timeout, None, 0
     while time.monotonic() <= deadline:
         state = load(state_path)
@@ -58,6 +81,13 @@ def main() -> int:
             if stable >= args.observations:
                 break
         time.sleep(args.interval)
+    try:
+        state = load(state_path)
+        metadata = load(paths["metadata.json"])
+        baseline, baseline_sha256 = load_hashed_json(paths["baseline.json"])
+    except (OSError, ValueError, json.JSONDecodeError) as error:
+        result = {"classification": "invalid", "reasons": [f"could not load final bound evidence: {error}"]}
+        print(json.dumps(result, indent=2, sort_keys=True)); return 2
     bindings = binding_errors(
         state,
         metadata,
@@ -81,7 +111,15 @@ def main() -> int:
         result = {"classification": "indeterminate", "reasons": ["reviewer stopped without an exit artifact"]}
     else:
         artifact = load(paths["exit.json"])
-        errors = artifact_errors(artifact, metadata, paths["stdout.log"], paths["stderr.log"])
+        errors = artifact_errors(
+            artifact,
+            metadata,
+            baseline_sha256,
+            paths["stdout.log"],
+            paths["stderr.log"],
+        )
+        if set(baseline) != BASELINE_FIELDS or baseline.get("schemaVersion") != REVIEW_PROTOCOL_VERSION:
+            errors.append("reviewer baseline schema is invalid")
         if errors:
             result = {"classification": "invalid", "reasons": errors}
         elif artifact["targetSha"] != args.expected_head or repository_observation(repository)[0] != args.expected_head:
@@ -89,7 +127,40 @@ def main() -> int:
         else:
             current = repository_observation(repository)
             changed = [label for label, value, expected in zip(("HEAD", "working tree", "common Git configuration"), current, (baseline.get("head"), baseline.get("statusPorcelain"), baseline.get("commonGitConfigSha256"))) if value != expected]
-            if changed:
+            observation_error = None
+            normalization_path = baseline["normalizationArtifact"]
+            normalization_sha = baseline["normalizationSha256"]
+            if not isinstance(normalization_path, str) or not isinstance(normalization_sha, str):
+                changed.append("normalization evidence")
+            else:
+                normalization = Path(normalization_path)
+                round_id = baseline["roundId"]
+                if not isinstance(round_id, str):
+                    changed.append("normalization evidence")
+                else:
+                    normalization_artifact, validation_errors = validate_normalization_artifact(
+                        artifact_path=normalization,
+                        expected_sha256=normalization_sha,
+                        round_id=round_id,
+                        repository=repository,
+                    )
+                    capture_errors = [
+                        error for error in validation_errors
+                        if error.startswith("could not verify normalized repository state:")
+                    ]
+                    if capture_errors:
+                        observation_error = "; ".join(capture_errors)
+                    elif validation_errors:
+                        changed.append("normalization evidence")
+                    else:
+                        if baseline["repositoryState"] != normalization_artifact.get("after"):
+                            changed.append("reviewer baseline")
+            if observation_error is not None:
+                result = {
+                    "classification": "indeterminate",
+                    "reasons": [f"could not capture strict reviewer state: {observation_error}"],
+                }
+            elif changed:
                 result = {"classification": "side_effect_detected", "reasons": [f"unauthorized change: {item}" for item in changed]}
             elif artifact["exitCode"] != 0:
                 result = {"classification": "indeterminate", "reasons": [f"reviewer exited with status {artifact['exitCode']}"]}

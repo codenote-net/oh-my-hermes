@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 
 from operation_protocol import initial_state, spawn_gated, update_state
+from normalization_protocol import validate_normalization_artifact
 from reviewer_protocol import REVIEW_PROTOCOL_VERSION, common_git_config_hash
 from worker_protocol import (
     atomic_write_json,
@@ -36,6 +37,9 @@ def main() -> int:
         default="reconcile the reviewer artifact and continue the exact-SHA review gate",
     )
     parser.add_argument("--require-command-evidence", action="store_true")
+    parser.add_argument("--normalization-artifact", type=Path, required=True)
+    parser.add_argument("--normalization-sha256", required=True)
+    parser.add_argument("--round-id", required=True)
     parser.add_argument("command", nargs=argparse.REMAINDER)
     args = parser.parse_args()
     if args.command[:1] == ["--"]:
@@ -46,17 +50,35 @@ def main() -> int:
     directory, repository = args.artifact_dir.resolve(), args.repository.resolve()
     if directory.exists() and any(directory.iterdir()):
         raise ValueError("artifact directory must be absent or empty")
-    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
     head = git(repository, "rev-parse", "HEAD").decode().strip()
     if head != args.target_sha:
         raise ValueError(f"repository HEAD {head} does not match target {args.target_sha}")
+    normalization, normalization_errors = validate_normalization_artifact(
+        artifact_path=args.normalization_artifact.resolve(),
+        expected_sha256=args.normalization_sha256,
+        round_id=args.round_id,
+        repository=repository,
+    )
+    if normalization_errors:
+        raise ValueError("; ".join(normalization_errors))
+    if normalization["head"] != args.target_sha:
+        raise ValueError("normalization artifact HEAD does not match reviewer target")
+    directory.mkdir(parents=True, mode=0o700, exist_ok=True)
     baseline = {
+        "schemaVersion": REVIEW_PROTOCOL_VERSION,
         "head": head,
         "statusPorcelain": git(repository, "status", "--porcelain=v1", "--untracked-files=all").decode(),
         "commonGitConfigSha256": common_git_config_hash(repository),
         "capturedAt": utc_now(),
     }
+    baseline.update(
+        normalizationArtifact=str(args.normalization_artifact.resolve()),
+        normalizationSha256=args.normalization_sha256,
+        roundId=args.round_id,
+        repositoryState=normalization["after"],
+    )
     atomic_write_json(directory / "baseline.json", baseline)
+    baseline_sha256 = sha256_file(directory / "baseline.json")
 
     stdout_path, stderr_path = directory / "stdout.log", directory / "stderr.log"
     state_path = directory / "operation-state.json"
@@ -92,6 +114,7 @@ def main() -> int:
                 processIdentity=identity_value,
                 knownDescendantIdentities=descendants,
                 targetSha=args.target_sha,
+                baselineSha256=baseline_sha256,
                 reviewKind=args.review_kind,
                 requireCommandEvidence=args.require_command_evidence,
                 startedAt=started_at,
@@ -104,12 +127,27 @@ def main() -> int:
                 processIdentity=identity_value,
             )
 
+        def validate_before_release() -> None:
+            if sha256_file(directory / "baseline.json") != baseline_sha256:
+                raise ValueError("reviewer baseline changed before reviewer release")
+            _, errors = validate_normalization_artifact(
+                artifact_path=args.normalization_artifact.resolve(),
+                expected_sha256=args.normalization_sha256,
+                round_id=args.round_id,
+                repository=repository,
+            )
+            if errors:
+                raise ValueError(
+                    "normalized repository changed before reviewer release: " + "; ".join(errors)
+                )
+
         worker = spawn_gated(
             args.command,
             cwd=repository,
             stdout=stdout,
             stderr=stderr,
             publish_identity=publish_identity,
+            pre_release_check=validate_before_release,
         )
         identity = metadata["processIdentity"]
         while worker.poll() is None:
@@ -143,6 +181,7 @@ def main() -> int:
         "commandHash": digest,
         "processIdentity": identity,
         "targetSha": args.target_sha,
+        "baselineSha256": baseline_sha256,
         "exitCode": exit_code,
         "stdoutSha256": sha256_file(stdout_path),
         "stderrSha256": sha256_file(stderr_path),

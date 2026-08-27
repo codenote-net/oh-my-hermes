@@ -32,6 +32,7 @@ For new-run, resume, durable-state, and legacy salvage rules, read
 [resume-and-salvage.md](references/resume-and-salvage.md) before preflight.
 For every background reviewer or verifier, read
 [reviewer-artifact-reconciliation.md](references/reviewer-artifact-reconciliation.md) and use
+`scripts/normalize-review-candidate.py`, `scripts/run-reviewer.py`, and
 `scripts/reconcile-reviewer.py`; never accept reviewer output ad hoc.
 Use the canonical schemas and official initializer, baseline capture, and pre-launch validator in
 [durable-worker-protocol.md](references/durable-worker-protocol.md). Never hand-author state.
@@ -269,11 +270,43 @@ the worker to infer the boundary from the surrounding workflow.
    before/after evidence.
 7. If every safety and information check passes, preserve the combined worker report and continue.
    The orchestrator must not repair the implementation itself.
-8. Capture these three independent review artifacts. Include the complete immutable issue
+8. Before every local review round, create a complete exact-path JSON allowlist from the paths
+   that passed the worker side-effect and issue-scope checks. Then run
+   `scripts/normalize-review-candidate.py --run-dir <run-dir> --repository <repository>
+   --allowed-paths-json <allowlist> --round-id <unique-round-id>`. The helper uses the existing
+   immutable issue snapshot and captures HEAD, branch, all refs and reflogs, porcelain status,
+   staged and unstaged diff hashes, all untracked file hashes and modes, the complete allowlist, index and
+   working-tree fingerprints, remote branch OID, and complete branch PR snapshot before it invokes
+   `git add -N -- <exact-paths>` as an argument array. It fails before normalization if any
+   untracked or existing intent-to-add path is absent from the allowlist. Never use `.`, `-A`,
+   `--all`, shell-concatenated paths, a private index, a repository copy, or an independent review
+   sandbox for this normalization.
+9. Require normalization to verify unchanged HEAD, branch, all refs and reflogs, remote OID, PR
+   snapshot, immutable issue snapshot, Git configuration, working-tree content and modes, existing index
+   entries, and staged diff. Every normalized path must be status ` A`, stage zero, and use empty
+   blob `e69de29bb2d1d6434b8b29ae775ad8c2e48c5391`. Require the unique atomic normalization
+   artifact and its reported SHA-256 as review evidence. Stop fail-closed before every reviewer if
+   normalization failed, its artifact is missing or modified, or the repository no longer matches
+   it. Claim each round ID exclusively so concurrent or repeated normalizers cannot overwrite its
+   evidence. Verify the required SHA-1 empty-blob semantics before `git add -N`; reject another Git
+   object format without changing the index. A later fix worker's new untracked files require a new
+   scope check and artifact for the next round; revalidate already-normalized path hashes without
+   staging their real content. Never overwrite an earlier round artifact.
+10. Only after the normalization artifact is published, launch all three local reviewers with the
+   same artifact path, artifact SHA-256, round ID, and normalized repository state. Capture these
+   three independent review artifacts. Include the complete immutable issue
    snapshot and the no-refetch instruction in every review prompt:
    - Codex `/review` against the branch diff from the recorded base.
    - Claude Code `/code-review` against the same diff.
    - Claude Code `/security-review` against the same diff.
+   Bind the atomic `baseline.json` SHA-256 into both reviewer metadata and the wrapper-owned exit
+   artifact. Revalidate the complete normalized state after the blocked child identity is durably
+   published and immediately before releasing that child to execute. A missing, changed, or
+   unbound baseline and any pre-release repository drift fail closed without executing the reviewer.
+   Hash and parse each normalization artifact from one immutable in-memory byte sequence. After
+   reviewer process-tree quiescence, likewise load `baseline.json` once, verify that exact byte
+   sequence against the exit binding, and use only the parsed object from those bytes. Protocol v2
+   baselines require the complete normalization evidence schema; no legacy bypass is allowed.
    Require a concrete output schema, not only prose such as “label every finding”: each finding
    must include an explicit `severity` field whose value is `critical`, `high`, `medium`, or `low`,
    and the final line must be exactly `High-priority findings: N`. State that omission of any
@@ -282,7 +315,7 @@ the worker to infer the boundary from the surrounding workflow.
    Launch one narrower read-only classification artifact that preserves the existing findings
    verbatim, forbids new findings and repository commands, and adds only the missing severities plus
    the canonical final count. Reconcile that artifact normally before aggregating the gate.
-9. Run long jobs in the background when supported and poll them to terminal completion. Before
+11. Run long jobs in the background when supported and poll them to terminal completion. Before
    launch, durably record the exact `resumeAfterCompletion` action and expected artifact paths.
    Preserve
    stdout, stderr, exit status, and target SHA for each artifact. A review that prints a
@@ -290,15 +323,15 @@ the worker to infer the boundary from the surrounding workflow.
    Retry with a narrower read-only prompt when appropriate, but never count a partial artifact as
    clean. Run independent read-only reviews in parallel only when they cannot mutate the same
    worktree. A failed or incomplete review is not a clean result.
-10. Normalize priorities. Treat `critical`, `high`, `P0`, and `P1` (and explicit equivalents such
+12. Normalize priorities. Treat `critical`, `high`, `P0`, and `P1` (and explicit equivalents such
    as blocker or severe exploitable vulnerability) as high priority. Do not promote ambiguous
    findings merely to force convergence; retain the reviewer's evidence and stated severity.
-11. If zero high-priority findings remain and every review completed, leave the local loop.
-12. Otherwise, if ten fix invocations have already completed, stop before an eleventh, summarize
+13. If zero high-priority findings remain and every review completed, leave the local loop.
+14. Otherwise, if ten fix invocations have already completed, stop before an eleventh, summarize
    repeated and unresolved findings, preserve the branch, execute the fix-limit human handoff
    below, and ask the user to decide. Never open or ready a PR while this safety valve is active.
    If fewer than ten fixes have run, increment the shared fix count and continue.
-13. Invoke Codex with the complete high-priority findings, complete immutable issue snapshot,
+15. Invoke Codex with the complete high-priority findings, complete immutable issue snapshot,
     no-refetch instruction, and the same strict restrictions and report contract used by the
     implementation prompt, followed by this task instruction:
 
@@ -308,7 +341,7 @@ the worker to infer the boundary from the surrounding workflow.
    validation, plus any repository-required final checks. Report files and exact results.
    ```
 
-14. Reconcile fix-worker completion, then apply the mandatory post-execution side-effect check,
+16. Reconcile fix-worker completion, then apply the mandatory post-execution side-effect check,
     semantic report validation, and one-time report-repair procedure. Only after all pass, return
     to the three-review gate. Do not unnecessarily rerun successful validations at the same SHA.
 
@@ -362,9 +395,13 @@ the new HEAD before running any of the five reviews for that HEAD.
    signing fails, keep staged changes intact and stop for the user to restore the configured
    signer; never silently disable signing or alter global Git configuration. Read
    [commit-signing-preflight.md](references/commit-signing-preflight.md) for the required check.
-3. Commit only issue-scoped files, then execute the complete conditional publication and signoff
-   invariant above. Open a draft PR after the pushed HEAD is verified and, only in required mode,
-   signoff succeeds. Record every commit in `<base>..HEAD`.
+3. Prepare publication with ordinary `git add -- <exact-issue-scoped-paths>` passed as an argument
+   array; never use `.`, `-A`, or `--all`. Verify every prior intent-to-add entry now has its real
+   blob OID, every staged path is allowlisted, and no out-of-scope content is staged. Then commit
+   only those issue-scoped files and execute the complete conditional publication and signoff
+   invariant above. Do not bypass hooks or use `--no-verify`. Open a draft PR after the pushed HEAD
+   is verified and, only in required mode, signoff succeeds. Record every commit in
+   `<base>..HEAD`.
 4. Run all five review checks for the exact current PR head SHA. Include the complete immutable
    issue snapshot and no-refetch instruction in every child prompt. Draft-PR CI success, signoff
    success, or a skipped automated reviewer is not a substitute for a missing review artifact:
