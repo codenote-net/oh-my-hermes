@@ -52,8 +52,8 @@ flowchart TD
     G0{"Signoff required<br/>by this repository?"}:::decision
     G1["Sign off and verify<br/>exact pushed HEAD"]:::orchestrator
     O11["Open draft PR"]:::orchestrator
-    R2["Five reviews on exact PR head<br/>3 local + PR review + fresh-worktree behavior"]:::reviewer
-    R3{"All five reviews complete<br/>with zero high findings?"}:::decision
+    R2["Two post-publication checks on exact PR head<br/>PR review + fresh-worktree behavior"]:::reviewer
+    R3{"Three retained local reviews + two post-publication checks<br/>complete with zero high findings?"}:::decision
     L1{"Shared fix count<br/>below 10?"}:::decision
     W2["Codex restricted PR or CI fix worker"]:::worker
     O9["Reconcile worker, safety check, and validation<br/>Hermes signs, commits, durably pushes and reconciles"]:::orchestrator
