@@ -385,7 +385,7 @@ fix commit:
 
 Only in required mode, every new commit invalidates the previous commit's signoff for workflow
 purposes. When that mode is active, even if the PR already exists or is ready, push and sign off
-the new HEAD before running any of the five reviews for that HEAD.
+the new HEAD before running the two post-publication reviews for that HEAD.
 
 ## Draft PR and PR loop
 
@@ -402,12 +402,11 @@ the new HEAD before running any of the five reviews for that HEAD.
    invariant above. Do not bypass hooks or use `--no-verify`. Open a draft PR after the pushed HEAD
    is verified and, only in required mode, signoff succeeds. Record every commit in
    `<base>..HEAD`.
-4. Run all five review checks for the exact current PR head SHA. Include the complete immutable
-   issue snapshot and no-refetch instruction in every child prompt. Draft-PR CI success, signoff
-   success, or a skipped automated reviewer is not a substitute for a missing review artifact:
-   - Codex `/review` locally.
-   - Claude Code `/code-review` locally.
-   - Claude Code `/security-review` locally.
+4. Do not rerun the three local reviews after publication. Verify that the published PR head tree
+   exactly matches the candidate tree that passed those reviews, retain their three artifacts, and
+   run only these two post-publication checks for the exact current PR head SHA. Include the complete
+   immutable issue snapshot and no-refetch instruction in every child prompt. Draft-PR CI success,
+   signoff success, or a skipped check is not a substitute for a missing review artifact:
    - Claude Code `/review #<pr-number>` against the PR.
    - Claude Code behavior verification in a fresh worktree.
    Persist explicit states `reviewer_running`, `reviewer_artifact_published`,
@@ -420,9 +419,11 @@ the new HEAD before running any of the five reviews for that HEAD.
    the primary worktree. Remove only the temporary worktree after its process has finished; retain
    its report. Treat setup, checkout, or validation failure as an incomplete gate, not zero
    findings.
-6. Aggregate high-priority counts separately for all five sources. If every source completed with
-   zero high-priority findings at the same SHA, immediately execute the ready handoff below before
-   waiting for CI. Review success permits Human review to begin, but is not final completion.
+6. Aggregate high-priority counts separately for all five sources: the three retained local-review
+   artifacts and the two post-publication artifacts. Require the published PR head tree to match the
+   locally reviewed candidate tree exactly. If every source completed with zero high-priority
+   findings for that candidate, immediately execute the ready handoff below before waiting for CI.
+   Review success permits Human review to begin, but is not final completion.
 7. Otherwise apply the same shared ten-fix safety valve. Ask Codex, under the complete worker
    restrictions, completion reconciliation, and mandatory side-effect check, to fix only the
    current high-priority findings and rerun affected validation. Then repeat the three local
@@ -435,8 +436,9 @@ the new HEAD before running any of the five reviews for that HEAD.
 
 ## Ready handoff and background CI monitor
 
-After all five review sources are clean for the exact PR head SHA, make the PR ready immediately
-and hand it to the Human without waiting for external CI. CI remains a required final gate, runs
+After all five review sources are clean and the three locally reviewed artifacts match the exact PR
+head tree, make the PR ready immediately and hand it to the Human without waiting for external CI.
+CI remains a required final gate, runs
 in parallel with Human review, and is monitored by the orchestrator in the background.
 
 ### Make the reviewed PR ready
@@ -445,16 +447,18 @@ in parallel with Human review, and is monitored by the orchestrator in the backg
    - implementation summary;
    - exact validation commands and results;
    - publication command and verified signoff contexts for the exact reviewed SHA, when required;
-   - all five review sources, target SHA, result, and high-priority count;
+   - all five review sources, target SHA or local candidate fingerprint, result, and high-priority
+     count;
    - unresolved medium/low findings and why each remains open, or `None`;
    - a prominent CI status note stating that CI is still being monitored and merge must wait for
      the final green-CI handoff;
    - `Closes #<issue-number>` as its own top-level line.
 2. Keep the closing keyword outside code blocks, quotes, lists, headings, and sentences. Read the
    body back with `gh pr view` and require the exact closing line and CI-waiting note.
-3. Reconfirm that the PR head SHA matches the SHA that passed all five reviews. If the PR is still
-   draft, run `gh pr ready`; if a prior cycle already made it ready, leave it ready. In both cases
-   verify `isDraft: false`. Never merge the PR or close the issue.
+3. Reconfirm that the PR head tree matches the candidate covered by the three local reviews and that
+   its SHA matches the two post-publication review artifacts. If the PR is still draft, run
+   `gh pr ready`; if a prior cycle already made it ready, leave it ready. In both cases verify
+   `isDraft: false`. Never merge the PR or close the issue.
 4. Re-resolve `gh api user --jq .login` and require it to match the recorded human-review target.
    Post and read back exactly one comment for this reviewed SHA, using the marker
    `<!-- omh-issue-loop-human-review-ci-pending:<reviewed-head-sha> -->` to avoid duplicates:
@@ -487,17 +491,19 @@ in parallel with Human review, and is monitored by the orchestrator in the backg
    If the repository genuinely has no CI configured, record that explicitly as the terminal green
    equivalent.
 4. Re-read the PR head SHA on every terminal observation. If it differs from the reviewed SHA,
-   discard stale CI and review results, run all five reviews for the new head, refresh the PR body
-   and ready handoff for that SHA, then start a new background CI monitor.
+   discard stale CI and review results, run the three local reviews against the new candidate, then
+   run only the PR review and fresh-worktree behavior verification after publication. Refresh the PR
+   body and ready handoff for that SHA, then start a new background CI monitor.
 5. On red, inspect available GitHub Actions logs and distinguish an actionable implementation
    failure from an external infrastructure, permission, quota, or service failure. Never change
    code to hide or bypass a failing check.
 6. For actionable red, count the repair against the shared ten-fix limit and invoke Codex as a
    restricted fix worker with the immutable issue snapshot, exact CI evidence, standard report
    contract, completion reconciliation, and mandatory post-execution side-effect check. After
-   affected validation, the orchestrator creates a new signed commit and pushes normally. Reapply
-   and verify signoff only when `signoff_required=true`. Run all five reviews after the conditional
-   publication gate passes, then refresh the ready handoff and monitor CI again.
+   affected validation, run the three local reviews until clean. The orchestrator then creates a new
+   signed commit and pushes normally. Reapply and verify signoff only when
+   `signoff_required=true`, run only the PR review and fresh-worktree behavior verification after
+   publication, then refresh the ready handoff and monitor CI again.
 7. If red is not repository-actionable or required evidence is unavailable, preserve the ready
    PR, post a non-duplicated status comment describing the blocker, and stop for Human direction.
    Do not claim final completion or post the CI-green marker.
@@ -566,7 +572,8 @@ completion signal. Do not create a PR solely to hold this comment.
 
 Before declaring completion, require this hard checklist:
 
-- Record all five review artifacts for the exact PR head SHA, including exit status.
+- Record all five review artifacts, including exit status, and prove that the exact PR head tree
+  matches the candidate tree covered by the three local artifacts.
 - Include review results and counts, validation results, unresolved findings, and the exact
   closing-keyword line in the PR body.
 - Re-read final PR metadata and require its head SHA to match the reviewed SHA.
