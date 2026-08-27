@@ -179,9 +179,14 @@ default for normal use; choose a distinct ID only for an intentionally independe
    ```
 
    Run this command with the output directory as its working directory. Keep the drafting prompt
-   self-contained and require an absolute output path. If Claude CLI authentication is
+   self-contained and require an absolute output path. In non-interactive `--print` mode,
+   `--permission-mode auto` can still return exit code 0 after asking for write confirmation
+   without creating the file. If that happens, rerun with `--permission-mode auto
+   --allowedTools Read Write Glob`, explicitly state that writing the requested draft is
+   authorized, and verify the file exists and is non-empty. If Claude CLI authentication is
    unavailable, stop and report that model-routing requirement; do not silently draft with the
-   main model. Completion: the child command exits successfully and the draft file exists.
+   main model. Completion: the child command exits successfully and the draft file exists and is
+   non-empty.
 
 7. **Verify with the main model.** Start a second Codex CLI pass with the exact same model ID:
 
