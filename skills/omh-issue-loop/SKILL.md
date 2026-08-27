@@ -47,10 +47,10 @@ Use these settings verbatim on every applicable child invocation:
 - **Codex local review**: `model="gpt-5.6-sol"`, `model_reasoning_effort="low"`,
   `service_tier="fast"`; use `/review`.
 - **Claude Code local code review**: model `Sonnet 5` (`claude-sonnet-5`), reasoning effort
-  `high`; use `/code-review`.
-- **Claude Code local security review**: model `Opus 4.7` (`claude-opus-4-7`), reasoning effort
-  `high`; use `/security-review`.
-- **Claude Code PR review**: model `Opus 4.7` (`claude-opus-4-7`), reasoning effort `high`; use
+  `medium`; use `/code-review`.
+- **Claude Code local security review**: model `Sonnet 5` (`claude-sonnet-5`), reasoning effort
+  `medium`; use `/security-review`.
+- **Claude Code PR review**: model `Sonnet 5` (`claude-sonnet-5`), reasoning effort `medium`; use
   `/review #<pr-number>`.
 - **Claude Code fresh-worktree behavior verification**: model `Sonnet 5`
   (`claude-sonnet-5`), reasoning effort `medium`; perform the verification from a fresh worktree.
@@ -75,11 +75,11 @@ these command shapes:
 
 ```bash
 # Local code review
-claude --permission-mode auto -p --model claude-sonnet-5 --effort high \
+claude --permission-mode auto -p --model claude-sonnet-5 --effort medium \
   --no-session-persistence '<CODE_REVIEW_PROMPT>'
 
 # Local security review and PR review
-claude --permission-mode auto -p --model claude-opus-4-7 --effort high \
+claude --permission-mode auto -p --model claude-sonnet-5 --effort medium \
   --no-session-persistence '<SECURITY_OR_PR_REVIEW_PROMPT>'
 
 # Fresh-worktree behavior verification
