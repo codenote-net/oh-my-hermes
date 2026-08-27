@@ -27,9 +27,9 @@ decisions, owners, or due dates that are absent from the recording.
 - Run the main workflow in Codex CLI with the exact model ID `gpt-5.6-luna`. It owns input
   collection, file handling, media extraction, transcription orchestration, verification, and
   the final result returned to Hermes.
-- Run only the transcript-to-minutes drafting step with `claude-haiku-4-5` through the
-  Claude CLI. The main agent must review the draft against the source transcript before accepting
-  it.
+- Run only the transcript-to-minutes drafting step with Sonnet 5 (`claude-sonnet-5`) at reasoning
+  effort `medium` through the Claude CLI. The main agent must review the draft against the source
+  transcript before accepting it.
 - Do not use `delegate_task` or a nested Hermes process to select the drafting model. Start a
   separate non-interactive Claude CLI process with an explicit model instead.
 
@@ -167,11 +167,12 @@ default for normal use; choose a distinct ID only for an intentionally independe
    completion until the process exits successfully, the log contains `Transcription saved to`,
    and the transcript file exists and is non-empty.
 
-6. **Draft with Claude Haiku.** Resolve absolute paths for the transcript, capture directory,
+6. **Draft with Claude Sonnet 5.** Resolve absolute paths for the transcript, capture directory,
    and draft output. Start a non-interactive Claude CLI process through `terminal`:
 
    ```bash
-   claude --permission-mode auto --print --model claude-haiku-4-5 --no-session-persistence \
+   claude --permission-mode auto --print --model claude-sonnet-5 --effort medium \
+     --no-session-persistence \
      "Read the complete transcript at <ABSOLUTE_TRANSCRIPT_PATH> and the capture files under \
    <ABSOLUTE_CAPTURE_DIR>. Draft grounded Japanese meeting minutes at <ABSOLUTE_DRAFT_PATH> \
    using Highlights, Decisions, Action Items, Detailed Minutes, and Reference: Capture Images. \
@@ -200,7 +201,7 @@ default for normal use; choose a distinct ID only for an intentionally independe
    unsupported claims, and write the corrected minutes to <ABSOLUTE_OUTPUT_PATH>."
    ```
 
-   The Luna verification pass must read the complete transcript and the Haiku draft. Correct
+   The Luna verification pass must read the complete transcript and the Sonnet 5 draft. Correct
    likely transcription errors only when supported by supplied proper nouns or visible evidence.
    Completion: every retained decision and action item maps to source evidence.
 
@@ -248,9 +249,9 @@ default for normal use; choose a distinct ID only for an intentionally independe
    weights. Monitor logs and disk/network activity before interrupting it.
 7. **Disabling the concurrency guard casually.** Use `--disable-concurrency-guard` only when the
    user accepts the memory risk.
-8. **Starting a nested Hermes process for Haiku.** Hermes has one configured default model and
+8. **Starting a nested Hermes process for Sonnet 5.** Hermes has one configured default model and
    its global delegation override affects unrelated tasks. Use Claude CLI with `--model` instead.
-9. **Silently falling back from Haiku.** Treat unavailable Claude CLI authentication as a blocked
+9. **Silently falling back from Sonnet 5.** Treat unavailable Claude CLI authentication as a blocked
    routing requirement and tell the user to run `claude auth`.
 10. **Passing `gpt-5.6` plus a prose "Luna mode" instruction.** Codex CLI exposes Luna as the
     model ID `gpt-5.6-luna`; pass it with `--model` or `-m` for every Luna run.
@@ -278,5 +279,5 @@ For a real recording, verification is complete only when all checks pass:
 - Capture count is recorded, including zero.
 - The Markdown deliverable exists and does not contain unsupported claims.
 - The run reports `gpt-5.6-luna` for orchestration and verification, and
-  `claude-haiku-4-5` for drafting.
+  `claude-sonnet-5` with reasoning effort `medium` for drafting.
 - Both Luna execution logs report `reasoning effort: low`.
