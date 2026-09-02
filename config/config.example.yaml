@@ -4,7 +4,7 @@
 # Scan additional skill directories (for example, this repository checked out locally).
 # skills:
 #   external_dirs:
-#     - ~/works/codenote-net/oh-my-hermes/skills
+#     - ~/works/codenote-net/hermes-talaria/skills
 
 # Third-party plugins must be enabled explicitly by plugin name.
 # plugins:

@@ -1,10 +1,12 @@
-# oh-my-hermes
+# hermes-talaria
 
 Personal customizations for [Hermes Agent](https://github.com/NousResearch/hermes-agent): skills, plugins, hooks, and config templates — all without modifying the agent core.
 
+The repository is named after the Talaria, the winged sandals of Hermes in Greek mythology—a fitting metaphor for extensions that empower Hermes Agent.
+
 ## Naming convention
 
-Everything maintained in this repository uses the `omh` prefix so customizations are easy to identify and do not collide with other extensions. See [AGENTS.md](AGENTS.md) for the identifier-specific rules and examples.
+Everything maintained in this repository continues to use the `omh` prefix as a stable namespace, so existing skill names and configurations remain compatible. See [AGENTS.md](AGENTS.md) for the identifier-specific rules and examples.
 
 ## Layout
 
@@ -22,7 +24,7 @@ scripts/   # Setup helpers
 ### Skills (as a tap)
 
 ```sh
-hermes skills tap add codenote-net/oh-my-hermes
+hermes skills tap add codenote-net/hermes-talaria
 ```
 
 Alternatively, add this repo's `skills/` directory to `skills.external_dirs` in your `~/.hermes/config.yaml`:
@@ -30,13 +32,13 @@ Alternatively, add this repo's `skills/` directory to `skills.external_dirs` in 
 ```yaml
 skills:
   external_dirs:
-    - /path/to/oh-my-hermes/skills
+    - /path/to/hermes-talaria/skills
 ```
 
 ### Plugins
 
 ```sh
-hermes plugins install codenote-net/oh-my-hermes
+hermes plugins install codenote-net/hermes-talaria
 ```
 
 Then enable them explicitly under `plugins.enabled` in `config.yaml`.
