@@ -6,7 +6,9 @@ The repository is named after the Talaria, the winged sandals of Hermes in Greek
 
 ## Naming convention
 
-Everything maintained in this repository continues to use the `omh` prefix as a stable namespace, so existing skill names and configurations remain compatible. See [AGENTS.md](AGENTS.md) for the identifier-specific rules and examples.
+Everything maintained in this repository uses the `ht` prefix so customizations are easy to identify and do not collide with other extensions. See [AGENTS.md](AGENTS.md) for the identifier-specific rules and examples.
+
+This prefix replaces the former `omh` namespace. The migration is intentionally breaking: existing skill invocations, scheduled tasks, and configuration references must be updated from `omh-`/`omh_` to `ht-`/`ht_`.
 
 ## Layout
 
@@ -58,8 +60,8 @@ If Hermes is already running, refresh its in-process skill cache after installat
 ```
 
 Invoke an installed skill with its generated direct slash command, for example
-`/omh-plan-epic-issue`. `/skills` manages the Skills Hub, so `/skills
-omh-plan-epic-issue` is parsed as an unknown Hub action rather than a skill invocation.
+`/ht-plan-epic-issue`. `/skills` manages the Skills Hub, so `/skills
+ht-plan-epic-issue` is parsed as an unknown Hub action rather than a skill invocation.
 
 Set `HERMES_DIR` to install into a location other than `~/.hermes`. You can also copy `config/config.example.yaml` to `~/.hermes/config.yaml` manually and fill in your own values.
 

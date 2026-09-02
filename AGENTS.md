@@ -4,11 +4,11 @@ The `hermes-talaria` repository contains personal skills, plugins, hooks, bundle
 
 ## Naming convention
 
-- When creating a skill, prefix its directory name with `omh-` and set the same value in the `SKILL.md` frontmatter `name:` field (for example, `skills/omh-deploy-runbook/`, invoked as `/omh-deploy-runbook`).
-- When creating a plugin, use `omh` as its manifest name, or `omh-*` when multiple plugins are needed. Set custom tools to `toolset: "omh"` and prefix tool names with `omh_` (for example, `omh_fetch_api`).
-- Prefix slash commands, CLI subcommands, and scheduled task keys with `omh_` or `omh-`, according to the identifier style they use.
-- Prefix bundle and hook directory or file names with `omh-`.
+- When creating a skill, prefix its directory name with `ht-` and set the same value in the `SKILL.md` frontmatter `name:` field (for example, `skills/ht-deploy-runbook/`, invoked as `/ht-deploy-runbook`).
+- When creating a plugin, use `ht` as its manifest name, or `ht-*` when multiple plugins are needed. Set custom tools to `toolset: "ht"` and prefix tool names with `ht_` (for example, `ht_fetch_api`).
+- Prefix slash commands, CLI subcommands, and scheduled task keys with `ht_` or `ht-`, according to the identifier style they use.
+- Prefix bundle and hook directory or file names with `ht-`.
 
-Hermes skills have no automatic namespace: their directory names are global identifiers. The `omh` prefix makes every customization recognizable and avoids collisions with bundled or tap-provided skills and other extensions.
+Hermes skills have no automatic namespace: their directory names are global identifiers. The `ht` prefix makes every customization recognizable and avoids collisions with bundled or tap-provided skills and other extensions.
 
-The `omh` prefix is retained as a stable namespace after the repository rename; do not migrate existing identifiers to an `ht` prefix.
+The `ht` prefix replaces the former `omh` namespace. This is an intentional breaking migration; do not create or retain new identifiers with the old prefix.

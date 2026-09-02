@@ -1,0 +1,4 @@
+interface:
+  display_name: "Plan Epic into Sub-Issues"
+  short_description: "Create dependency-ordered GitHub sub-issues"
+  default_prompt: "Use $ht-plan-epic-issue to refine the supplied epic Issue, review its decomposition, create one new implementation-ready Issue per planned sub-issue, attach them as native sub-issues, and verify their dependency-aware work order."
