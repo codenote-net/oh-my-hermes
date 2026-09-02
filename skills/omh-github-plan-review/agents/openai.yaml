@@ -1,4 +1,0 @@
-interface:
-  display_name: "Private GitHub Plan Review"
-  short_description: "Review a GitHub plan without posting results"
-  default_prompt: "Use $omh-github-plan-review to privately review the plan at a specified GitHub URL and return findings only in this conversation."

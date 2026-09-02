@@ -1,4 +1,0 @@
-interface:
-  display_name: "Plan and Create Issue"
-  short_description: "Review a plan twice, then create an Issue"
-  default_prompt: "Use $omh-plan-issue to draft an implementation plan, iterate independent Codex and Claude Code reviews until both are clean, and create one verified GitHub Issue for omh-issue-loop."

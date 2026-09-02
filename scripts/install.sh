@@ -35,5 +35,5 @@ if [ ! -f "$HERMES_DIR/config.yaml" ]; then
 fi
 
 echo "Done. If Hermes is already running, use /reload-skills before invoking a newly linked skill."
-echo "Invoke skills directly as /<skill-name> (for example, /omh-plan-epic-issue)."
+echo "Invoke skills directly as /<skill-name> (for example, /ht-plan-epic-issue)."
 echo "Remember to enable plugins under plugins.enabled in config.yaml."
