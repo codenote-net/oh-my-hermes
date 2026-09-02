@@ -1,6 +1,6 @@
 # Repository context
 
-This repository contains personal skills, plugins, hooks, bundles, and configuration templates for Hermes Agent.
+The `hermes-talaria` repository contains personal skills, plugins, hooks, bundles, and configuration templates for Hermes Agent.
 
 ## Naming convention
 
@@ -10,3 +10,5 @@ This repository contains personal skills, plugins, hooks, bundles, and configura
 - Prefix bundle and hook directory or file names with `omh-`.
 
 Hermes skills have no automatic namespace: their directory names are global identifiers. The `omh` prefix makes every customization recognizable and avoids collisions with bundled or tap-provided skills and other extensions.
+
+The `omh` prefix is retained as a stable namespace after the repository rename; do not migrate existing identifiers to an `ht` prefix.
